@@ -1,0 +1,1251 @@
+<!doctype html>
+<html lang="lv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ūdens skaitītāju rādījumu iesniegšana</title>
+
+  <style>
+    :root{
+      --bg:#f6f7f9;
+      --card:#ffffff;
+      --border:#d8dde3;
+      --muted:#7b7b7b;
+      --blue:#1f5f86;
+      --danger:#b00020;
+      --radius:14px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+
+    *{ box-sizing:border-box; }
+    body{ background:var(--bg); margin:0; padding:24px; color:#111; }
+    .wrap{ max-width:980px; margin:0 auto; }
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:18px;
+      padding:18px;
+      box-shadow:0 6px 18px rgba(0,0,0,.06);
+    }
+
+    h1{ margin:0 0 14px; font-size:20px; font-weight:900; }
+    .section-title{ font-size:14px; font-weight:900; margin:14px 0 8px; color:#1b1b1b; }
+
+    .field{ display:flex; flex-direction:column; gap:6px; margin-bottom:12px; position:relative; }
+    label{ font-size:13px; color:#222; font-weight:800; }
+
+    input, button{ font:inherit; }
+    input[type="text"]{
+      border:2px solid #cfd6de;
+      border-radius:var(--radius);
+      padding:12px 12px;
+      background:#fff;
+      outline:none;
+      transition:border-color .15s ease;
+      width:100%;
+    }
+    input:focus{ border-color:var(--blue); }
+
+    input[readonly], input:disabled{
+      background:#f3f5f8;
+      color:#111;
+    }
+
+    .hint{ font-size:12px; color:#666; margin-top:-2px; }
+
+    .error{ font-size:12px; color:var(--danger); display:none; }
+    .error.show{ display:block; }
+
+    /* Window notice */
+    .noticeBox{
+      margin:0 0 12px;
+      border:1px solid #f0c9cf;
+      background:#fff5f7;
+      border-radius:14px;
+      padding:10px 12px;
+      font-size:13px;
+      color:#7a0016;
+      display:none;
+    }
+    .noticeBox.show{ display:block; }
+
+    /* Lookup notice */
+    .lookupBox{
+      margin:0 0 12px;
+      border:1px solid #cfd6de;
+      background:#f7fafc;
+      border-radius:14px;
+      padding:10px 12px;
+      font-size:13px;
+      color:#1b1b1b;
+      display:none;
+    }
+    .lookupBox.show{ display:block; }
+    .lookupBox.loading{ opacity:.85; }
+    .lookupBox.good{ border-color:#cfe8d6; background:#f3fff6; }
+    .lookupBox.bad{ border-color:#f0c9cf; background:#fff5f7; color:#7a0016; }
+
+    /* Label row with info icon */
+    .labelRow{
+      display:flex;
+      align-items:center;
+      gap:8px;
+    }
+    .infoIcon{
+      width:22px;
+      height:22px;
+      border-radius:999px;
+      border:2px solid #cfd6de;
+      background:#fff;
+      color:#1f5f86;
+      font-weight:1000;
+      line-height:18px;
+      cursor:pointer;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      padding:0;
+      flex:0 0 22px;
+    }
+    .infoIcon:hover{ background:#eef3f8; }
+    .infoIcon:focus{ outline:3px solid rgba(31,95,134,.25); outline-offset:2px; }
+
+    /* 8 digit boxes */
+    .code-boxes{
+      display:flex;
+      flex-wrap:nowrap;
+      gap:8px;
+      width:fit-content;
+      max-width:100%;
+      overflow:hidden;
+    }
+    .code-boxes input{
+      width:40px;
+      height:46px;
+      flex:0 0 40px;
+      text-align:center;
+      font-size:18px;
+      font-weight:900;
+      border-radius:12px;
+      border:2px solid #cfd6de;
+      padding:0;
+      min-width:0;
+    }
+
+    @media (max-width: 520px){
+      .code-boxes{
+        width:100%;
+        display:grid;
+        grid-template-columns: repeat(8, minmax(0, 1fr));
+        gap:6px;
+      }
+      .code-boxes input{
+        width:100%;
+        flex:initial;
+        height:44px;
+        font-size:16px;
+      }
+    }
+    @media (max-width: 380px){
+      .code-boxes{ gap:5px; }
+      .code-boxes input{ height:42px; font-size:15px; border-radius:10px; }
+    }
+
+    /* buttons */
+    .btn-row{ display:flex; gap:12px; margin-top:12px; flex-wrap:wrap; }
+    .btn-secondary{
+      border-radius:14px; border:2px solid #cfd6de; background:#fff;
+      padding:12px 14px; cursor:pointer; font-weight:900;
+    }
+    .btn-secondary:hover{ background:#eef3f8; }
+
+    .btn-primary{
+      border-radius:14px; border:none; background:var(--blue); color:#fff;
+      padding:14px 18px; cursor:pointer; font-weight:1000; width:100%; margin-top:14px;
+    }
+    .btn-primary.disabled{ opacity:.55; cursor:not-allowed; }
+
+    /* address blocks */
+    .address-block{
+      border:2px solid #e3e7ec;
+      border-radius:18px;
+      padding:14px;
+      margin-top:12px;
+      background:#fff;
+      position:relative;
+    }
+
+    .address-head{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom:8px;
+    }
+
+    .badge{
+      font-size:12px; color:#1b1b1b; font-weight:900;
+      background:#eef3f8; border-radius:999px; padding:6px 10px;
+    }
+    .badge.hidden{ display:none; }
+
+    .delete-address-btn{
+      border-radius:14px;
+      border:2px solid #f0c9cf;
+      background:#fff;
+      padding:10px 12px;
+      cursor:pointer;
+      font-weight:900;
+      color:var(--danger);
+      white-space:nowrap;
+    }
+    .delete-address-btn.hidden{ display:none; }
+    .delete-address-btn:disabled{ opacity:.35; cursor:not-allowed; }
+
+    /* Manual meters */
+    .meters{ margin-top:10px; display:flex; flex-direction:column; gap:10px; }
+    .meter-row{
+      display:grid;
+      grid-template-columns: 1fr 1fr 56px;
+      gap:10px;
+      align-items:end;
+    }
+    .meterNrField{ grid-column:1; }
+    .readingField{ grid-column:2; }
+    .delCell{ grid-column:3; display:flex; justify-content:flex-end; align-items:flex-end; }
+
+    .del-btn{
+      width:42px;
+      height:42px;
+      border-radius:12px;
+      border:2px solid #f0c9cf;
+      background:#fff;
+      color:var(--danger);
+      cursor:pointer;
+      font-weight:1000;
+    }
+    .del-btn.hidden{ display:none; }
+
+    .btn-add-meter{
+      border-radius:12px;
+      border:2px dashed #cfd6de;
+      background:#f9fbfd;
+      padding:10px 14px;
+      font-weight:900;
+      color:#1976d2;
+      cursor:pointer;
+      width:fit-content;
+      margin-top:8px;
+    }
+    .btn-add-meter:hover{ background:#eef3f8; }
+
+    /* Mobile */
+    @media (max-width:640px){
+      .meter-row{
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+        align-items:stretch;
+      }
+      .meterNrField, .readingField, .delCell{ grid-column:auto; }
+      .delCell{ justify-content:stretch; }
+
+      .del-btn{
+        width:100%;
+        height:auto;
+        padding:12px 14px;
+        border-radius:14px;
+        text-align:center;
+      }
+      .del-btn span{ display:none; }
+      .del-btn::before{ content:"Dzēst skaitītāju"; }
+
+      .address-head{
+        flex-direction:column;
+        align-items:stretch;
+        gap:8px;
+      }
+      .delete-address-btn{ width:100%; }
+      .badge{ width:fit-content; }
+    }
+
+    /* Address autocomplete dropdown */
+    .suggestions{
+      position:absolute; top:100%; left:0; right:0;
+      background:#fff; border:1px solid var(--border); border-radius:14px;
+      box-shadow:0 10px 24px rgba(0,0,0,.12);
+      overflow:hidden; z-index:50; margin-top:6px;
+      display:none; max-height:320px; overflow-y:auto;
+    }
+    .suggestions.show{ display:block; }
+    .sitem{
+      width:100%;
+      text-align:left;
+      padding:10px 12px;
+      background:#fff;
+      border:none;
+      cursor:pointer;
+      font-size:13px;
+      line-height:1.25;
+    }
+    .sitem:hover{ background:#eef3f8; }
+
+    .infoBox{
+      margin-top:10px;
+      border:1px solid #f0c9cf;
+      background:#fff5f7;
+      border-radius:14px;
+      padding:10px 12px;
+      font-size:13px;
+      color:#7a0016;
+      display:none;
+    }
+    .infoBox.show{ display:block; }
+
+    /* AUTO section */
+    #autoSection{ display:none; margin-top:10px; }
+    .auto-meter-row{
+      display:grid;
+      grid-template-columns: 1fr 1fr 1fr 140px;
+      gap:10px;
+      align-items:end;
+      margin-top:10px;
+    }
+    .auto-meter-row.neg input[data-role="consumption"]{
+      color:var(--danger);
+      font-weight:1000;
+    }
+    @media (max-width:640px){
+      .auto-meter-row{ grid-template-columns: 1fr; }
+    }
+
+    /* Submit modal */
+    #submitModal { position: fixed; inset: 0; z-index: 9999; display:none; }
+    #submitModalBackdrop { position: absolute; inset: 0; background: rgba(0,0,0,.35); }
+    #submitModalCard{
+      position:absolute;
+      left:50%;
+      top:50%;
+      transform: translate(-50%,-50%);
+      width:min(420px, calc(100vw - 32px));
+      background:#fff;
+      border:1px solid #e5e7eb;
+      border-radius:16px;
+      padding:16px 16px 14px;
+      box-shadow: 0 18px 50px rgba(0,0,0,.18);
+    }
+    #submitModalTitle{ font-weight:900; font-size:16px; margin:0 0 6px; }
+    #submitModalText{ font-size:14px; color:#333; margin:0 0 12px; }
+    #submitModalActions{ display:flex; gap:10px; justify-content:flex-end; }
+    #submitModalCloseBtn, #submitModalRetryBtn{
+      border-radius:12px; padding:10px 12px; font-weight:900; cursor:pointer;
+      border:2px solid #cfd6de; background:#fff;
+    }
+    #submitModalCloseBtn{ border-color: var(--blue); color: var(--blue); }
+    #submitModalRetryBtn{ border-color: var(--danger); color: var(--danger); }
+    @media (max-width:640px){
+      #submitModalActions{ justify-content:stretch; }
+      #submitModalCloseBtn, #submitModalRetryBtn{ width:100%; }
+    }
+
+    /* Not found modal */
+    #notFoundModal { position: fixed; inset: 0; z-index: 9998; display:none; }
+    #notFoundBackdrop { position: absolute; inset: 0; background: rgba(0,0,0,.35); }
+    #notFoundCard{
+      position:absolute;
+      left:50%;
+      top:50%;
+      transform: translate(-50%,-50%);
+      width:min(520px, calc(100vw - 32px));
+      background:#fff;
+      border:1px solid #e5e7eb;
+      border-radius:16px;
+      padding:16px 16px 14px;
+      box-shadow: 0 18px 50px rgba(0,0,0,.18);
+    }
+    #notFoundTitle{ font-weight:900; font-size:16px; margin:0 0 6px; color:#111; }
+    #notFoundText{ font-size:14px; color:#333; margin:0 0 12px; }
+    #notFoundActions{ display:flex; gap:10px; justify-content:flex-end; }
+    .btn-outline{
+      border-radius:12px; padding:10px 12px; font-weight:900; cursor:pointer;
+      border:2px solid #cfd6de; background:#fff;
+    }
+    .btn-outline.primary{ border-color: var(--blue); color: var(--blue); }
+    .btn-outline.danger{ border-color: var(--danger); color: var(--danger); }
+    @media (max-width:640px){
+      #notFoundActions{ justify-content:stretch; flex-direction:column; }
+      .btn-outline{ width:100%; }
+    }
+
+    /* Help modal */
+    #helpModal{ position:fixed; inset:0; z-index:9997; display:none; }
+    #helpBackdrop{ position:absolute; inset:0; background:rgba(0,0,0,.35); }
+    #helpCard{
+      position:absolute; left:50%; top:50%;
+      transform:translate(-50%,-50%);
+      width:min(560px, calc(100vw - 32px));
+      background:#fff; border:1px solid #e5e7eb; border-radius:16px;
+      padding:16px; box-shadow:0 18px 50px rgba(0,0,0,.18);
+    }
+    #helpTitle{ font-weight:900; font-size:16px; margin:0 0 8px; }
+    #helpText{ font-size:14px; color:#333; margin:0 0 12px; }
+    #helpImg{ width:100%; height:auto; border-radius:12px; border:1px solid #e5e7eb; display:block; }
+    #helpActions{ display:flex; justify-content:flex-end; margin-top:12px; }
+
+    #manualSection{ display:none; }
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Ūdens skaitītāju rādījumu iesniegšana</h1>
+
+    <div id="windowNotice" class="noticeBox"></div>
+    <div id="lookupNotice" class="lookupBox"></div>
+
+    <div class="section-title">Abonenta informācija</div>
+
+    <div class="field">
+      <div class="labelRow">
+        <label style="margin:0;">Abonenta numurs (8 cipari, sākas ar 012)</label>
+        <button type="button" class="infoIcon" id="helpBtn1" aria-label="Kur atrast abonenta kodu un līguma numuru?">i</button>
+      </div>
+      <div class="code-boxes" id="abonentaCodeBoxes"></div>
+      <div class="error" id="errAbonents">Abonenta numuram jābūt 8 cipariem.</div>
+    </div>
+
+    <div class="field">
+      <div class="labelRow">
+        <label style="margin:0;">Līguma numurs</label>
+        <button type="button" class="infoIcon" id="helpBtn2" aria-label="Kur atrast abonenta kodu un līguma numuru?">i</button>
+      </div>
+      <input id="contractNr" type="text" autocomplete="off" placeholder="Ievadi līguma numuru" />
+      <div class="hint">Ja klients nav atrodams, vari izvēlēties manuālo ievadi.</div>
+      <div class="error" id="errContract">Lūdzu ievadi līguma numuru.</div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn-secondary" id="manualSwitchBtn" type="button">Ievadīt manuāli</button>
+    </div>
+
+    <!-- AUTO (lookup) -->
+    <div id="autoSection">
+      <div class="section-title">Skaitītāji</div>
+      <div id="autoAddresses"></div>
+    </div>
+
+    <!-- MANUAL (old flow) -->
+    <div id="manualSection">
+      <div class="section-title">Adreses un skaitītāji</div>
+      <div id="addresses"></div>
+
+      <div class="btn-row">
+        <button class="btn-secondary" id="addAddressBtn" type="button">+ Pievienot adresi</button>
+      </div>
+    </div>
+
+    <button class="btn-primary disabled" id="submitBtn" type="button" aria-disabled="true">IESNIEGT</button>
+    <div id="submitInfo" class="infoBox"></div>
+  </div>
+</div>
+
+<!-- Submit popup -->
+<div id="submitModal">
+  <div id="submitModalBackdrop"></div>
+  <div id="submitModalCard" role="dialog" aria-modal="true" aria-labelledby="submitModalTitle">
+    <div id="submitModalTitle">SŪTU…</div>
+    <div id="submitModalText">Lūdzu uzgaidi, notiek rādījumu nosūtīšana.</div>
+    <div id="submitModalActions">
+      <button type="button" id="submitModalCloseBtn" style="display:none;">AIZVĒRT</button>
+      <button type="button" id="submitModalRetryBtn" style="display:none;">MĒĢINĀT VĒLREIZ</button>
+    </div>
+  </div>
+</div>
+
+<!-- Lookup not found modal -->
+<div id="notFoundModal">
+  <div id="notFoundBackdrop"></div>
+  <div id="notFoundCard" role="dialog" aria-modal="true" aria-labelledby="notFoundTitle">
+    <div id="notFoundTitle">Klients netika atrasts</div>
+    <div id="notFoundText">
+      Pārbaudiet abonenta kodu un līguma numuru. Ja nevarat atrast datus rēķinā, ievadiet rādījumus manuāli.
+    </div>
+    <div id="notFoundActions">
+      <button type="button" class="btn-outline primary" id="notFoundEditBtn">Labot</button>
+      <button type="button" class="btn-outline danger" id="notFoundManualBtn">Ievadīt manuāli</button>
+    </div>
+  </div>
+</div>
+
+<!-- Help modal -->
+<div id="helpModal">
+  <div id="helpBackdrop"></div>
+  <div id="helpCard" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+    <div id="helpTitle">Kur atrast abonenta kodu un līguma numuru?</div>
+    <div id="helpText">Abonenta kods un līguma numurs ir norādīts rēķina augšējā labajā stūrī.</div>
+    <img id="helpImg" src="/assets/rekins-paraugs.png" alt="Rēķina fragments ar abonenta kodu un līguma numuru" />
+    <div id="helpActions">
+      <button type="button" class="btn-outline primary" id="helpCloseBtn">AIZVĒRT</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const CFG = {
+    abonRegex: /^\d{8}$/,
+    meterNrRegex: /^\d+$/,
+    readingRegex: /^\d+([.]\d{1,2})?$/,
+    addrMinChars: 1,
+    addrLimit: 12,
+    meterDeleteShownFromIndex: 1
+  };
+
+  const $ = (sel, root=document) => root.querySelector(sel);
+  const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+
+  function el(tag, attrs={}, children=[]) {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") n.className = v;
+      else if (k === "text") n.textContent = v;
+      else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2), v);
+      else if (k === "value") n.value = v;
+      else n.setAttribute(k, v);
+    }
+    children.forEach(c => n.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
+    return n;
+  }
+
+  function escapeHtml(s) {
+    return (s || "").replace(/[&<>"']/g, (c) => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+    }[c]));
+  }
+
+  // ===== State =====
+  let MODE = "lookup"; // 'lookup' | 'manual'
+  let LOOKUP_TIMER = null;
+  let LOOKUP_LOADING = false;
+  let LOOKUP_FOUND = false;
+
+  // ===== Modal (submit) =====
+  let MODAL_LAST_STATE = "idle"; // idle|sending|success|error
+  function modalShow() { $('#submitModal').style.display = 'block'; }
+  function modalHide() { $('#submitModal').style.display = 'none'; }
+
+  function modalStateSending() {
+    MODAL_LAST_STATE = "sending";
+    modalShow();
+    $('#submitModalTitle').textContent = 'SŪTU…';
+    $('#submitModalText').textContent = 'Lūdzu uzgaidi, notiek rādījumu nosūtīšana.';
+    $('#submitModalCloseBtn').style.display = 'none';
+    $('#submitModalRetryBtn').style.display = 'none';
+  }
+
+  function modalStateSuccess() {
+    MODAL_LAST_STATE = "success";
+    modalShow();
+    $('#submitModalTitle').textContent = 'RĀDĪJUMS IESNIEGTS';
+    $('#submitModalText').textContent = 'Paldies! Jūsu rādījumi ir saņemti.';
+    $('#submitModalCloseBtn').style.display = 'inline-block';
+    $('#submitModalRetryBtn').style.display = 'none';
+  }
+
+  function modalStateError(errText) {
+    MODAL_LAST_STATE = "error";
+    modalShow();
+    $('#submitModalTitle').textContent = 'KĻŪDA';
+    $('#submitModalText').textContent = errText || 'Neizdevās nosūtīt. Lūdzu, mēģini vēlreiz.';
+    $('#submitModalCloseBtn').style.display = 'inline-block';
+    $('#submitModalRetryBtn').style.display = 'inline-block';
+  }
+
+  $('#submitModalCloseBtn').addEventListener('click', () => {
+    modalHide();
+    if (MODAL_LAST_STATE === "success") resetFormAll();
+  });
+  $('#submitModalRetryBtn').addEventListener('click', () => {
+    modalHide();
+    refreshAll();
+  });
+
+  // ===== Not found modal =====
+  function notFoundShow(){ $('#notFoundModal').style.display = 'block'; }
+  function notFoundHide(){ $('#notFoundModal').style.display = 'none'; }
+
+  $('#notFoundBackdrop').addEventListener('click', notFoundHide);
+  $('#notFoundEditBtn').addEventListener('click', () => {
+    notFoundHide();
+    $('#contractNr').focus();
+  });
+  $('#notFoundManualBtn').addEventListener('click', () => {
+    notFoundHide();
+    switchToManual();
+  });
+
+  // ===== Help modal =====
+  function helpShow(){ $('#helpModal').style.display = 'block'; }
+  function helpHide(){ $('#helpModal').style.display = 'none'; }
+
+  $('#helpBtn1').addEventListener('click', helpShow);
+  $('#helpBtn2').addEventListener('click', helpShow);
+  $('#helpBackdrop').addEventListener('click', helpHide);
+  $('#helpCloseBtn').addEventListener('click', helpHide);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { helpHide(); notFoundHide(); }
+  });
+
+  async function refreshWindowNotice() {
+    const box = $("#windowNotice");
+    try {
+      const res = await fetch("/api/window");
+      const w = await res.json();
+
+      if (!w.is_open && w.enforce) {
+        box.innerHTML = "<b>Rādījumu iesniegšana no 25.datuma līdz mēneša beigām.</b>";
+        box.classList.add("show");
+      } else if (!w.enforce) {
+        box.innerHTML = "<b>TESTA vide:</b> iesniegšana nav ierobežota pēc datuma.";
+        box.classList.add("show");
+      } else {
+        box.classList.remove("show");
+        box.innerHTML = "";
+      }
+    } catch {
+      box.classList.remove("show");
+      box.innerHTML = "";
+    }
+  }
+
+  // ===== 8 digit boxes =====
+  function initCodeBoxes() {
+    const host = $("#abonentaCodeBoxes");
+    host.innerHTML = "";
+    for (let i=0; i<8; i++) {
+      const inp = el("input", { type:"text", inputmode:"numeric", maxlength:"1", "aria-label":`Cipars ${i+1}` });
+
+      inp.addEventListener("input", () => {
+        inp.value = inp.value.replace(/\D/g, "").slice(0,1);
+        if (inp.value && i < 7) host.children[i+1].focus();
+        if (MODE === "lookup") scheduleLookup();
+        refreshAll();
+      });
+
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Backspace" && !inp.value && i > 0) host.children[i-1].focus();
+      });
+
+      inp.addEventListener("paste", (e) => {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData("text");
+        const digits = (text || "").replace(/\D/g, "").slice(0,8);
+        for (let j=0; j<8; j++) host.children[j].value = digits[j] || "";
+        (host.children[Math.min(digits.length,7)] || host.children[7]).focus();
+        if (MODE === "lookup") scheduleLookup();
+        refreshAll();
+      });
+
+      host.appendChild(inp);
+    }
+  }
+
+  function readAbonentaKods() {
+    return $$("#abonentaCodeBoxes input").map(i => i.value.trim()).join("");
+  }
+  function readContractNr(){
+    return String($("#contractNr").value || "").trim();
+  }
+
+  function setLookupNotice(type, html){
+    const box = $("#lookupNotice");
+    box.classList.remove("show", "loading", "good", "bad");
+    if (!html) { box.innerHTML=""; return; }
+    box.innerHTML = html;
+    box.classList.add("show");
+    if (type) box.classList.add(type);
+  }
+
+  // normalize reading: allow decimal, comma->dot, max 2 decimals
+  function normalizeReadingInput(raw) {
+    let s = String(raw || '').trim().replace(',', '.');
+    s = s.replace(/[^\d.]/g, '');
+    const firstDot = s.indexOf('.');
+    if (firstDot !== -1) {
+      s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, '');
+      const [a, b=''] = s.split('.');
+      s = a + '.' + b.slice(0, 2);
+    }
+    return s;
+  }
+  function parseReading(v){
+    const s = String(v || '').trim().replace(',', '.');
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // ===== AUTO rendering =====
+  function clearAuto(){
+    $("#autoAddresses").innerHTML = "";
+    $("#autoSection").style.display = "none";
+  }
+
+  function renderAuto(addresses){
+    const host = $("#autoAddresses");
+    host.innerHTML = "";
+
+    addresses.forEach((a, idx) => {
+      const addrText = String(a.address || "").trim();
+
+      const block = el("div", { class:"address-block" });
+      const head = el("div", { class:"address-head" }, [
+        el("div", { class:"badge", text:`Adrese ${idx+1}` }),
+        el("div", { style:"font-size:13px;font-weight:900;color:#111;", text: addrText })
+      ]);
+
+      const metersHost = el("div", { class:"meters" });
+
+      (a.meters || []).forEach((m) => {
+        const meter = String(m.meter_serial || "").trim();
+        const last = (m.last_reading == null) ? "" : String(m.last_reading);
+
+        const row = el("div", { class:"auto-meter-row", "data-meter": meter });
+
+        const f1 = el("div", { class:"field" }, [
+          el("label", { text:"Skaitītāja Nr" }),
+          el("input", { type:"text", readonly:"true", value: meter })
+        ]);
+
+        const f2 = el("div", { class:"field" }, [
+          el("label", { text:"Pēdējais rādījums" }),
+          el("input", { type:"text", readonly:"true", "data-role":"last", value: last })
+        ]);
+
+        const newInp = el("input", { type:"text", inputmode:"decimal", placeholder:"Ievadi jauno rādījumu", "data-role":"new" });
+        const f3 = el("div", { class:"field" }, [
+          el("label", { text:"Jaunais rādījums" }),
+          newInp
+        ]);
+
+        const consInp = el("input", { type:"text", readonly:"true", "data-role":"consumption" });
+        const f4 = el("div", { class:"field" }, [
+          el("label", { text:"Patēriņš" }),
+          consInp
+        ]);
+
+        newInp.addEventListener("input", () => {
+          newInp.value = normalizeReadingInput(newInp.value);
+
+          const prev = parseReading($("input[data-role='last']", row).value);
+          const cur = parseReading(newInp.value);
+          if (prev == null || cur == null){
+            consInp.value = "";
+            row.classList.remove("neg");
+          } else {
+            const diff = cur - prev;
+            consInp.value = diff.toFixed(2);
+            row.classList.toggle("neg", diff < 0);
+          }
+          refreshAll();
+        });
+
+        row.append(f1, f2, f3, f4);
+        metersHost.appendChild(row);
+      });
+
+      block.append(head, metersHost);
+      host.appendChild(block);
+    });
+
+    $("#autoSection").style.display = "";
+  }
+
+  function scheduleLookup(){
+    clearTimeout(LOOKUP_TIMER);
+    LOOKUP_TIMER = setTimeout(runLookup, 250);
+  }
+
+  async function runLookup(){
+    if (MODE !== "lookup") return;
+
+    const abon = readAbonentaKods();
+    const contract = readContractNr();
+
+    LOOKUP_FOUND = false;
+    clearAuto();
+
+    $("#errAbonents").classList.toggle("show", !!abon && !CFG.abonRegex.test(abon));
+    $("#errContract").classList.toggle("show", !!contract === false);
+
+    if (!CFG.abonRegex.test(abon) || !contract){
+      setLookupNotice(null, "");
+      refreshAll();
+      return;
+    }
+
+    LOOKUP_LOADING = true;
+    setLookupNotice("loading", "<b>Meklēju skaitītājus…</b> Lūdzu uzgaidi.");
+    refreshAll();
+
+    try{
+      const res = await fetch(`/api/lookup?subscriber=${encodeURIComponent(abon)}&contract=${encodeURIComponent(contract)}`);
+      const j = await res.json().catch(()=>null);
+
+      if (!res.ok || !j || j.ok !== true){
+        setLookupNotice("bad", "<b>Neizdevās veikt meklēšanu.</b> Pamēģini vēlreiz.");
+        LOOKUP_FOUND = false;
+        clearAuto();
+        refreshAll();
+        return;
+      }
+
+      if (j.found !== true || !Array.isArray(j.addresses) || j.addresses.length === 0){
+        setLookupNotice("bad", "<b>Klients netika atrasts.</b>");
+        LOOKUP_FOUND = false;
+        clearAuto();
+        notFoundShow();
+        refreshAll();
+        return;
+      }
+
+      LOOKUP_FOUND = true;
+      setLookupNotice("good", "<b>Dati atrasti.</b> Ievadi jaunos rādījumus visiem skaitītājiem.");
+      renderAuto(j.addresses);
+      refreshAll();
+    } catch {
+      setLookupNotice("bad", "<b>Neizdevās veikt meklēšanu.</b> Pamēģini vēlreiz.");
+      LOOKUP_FOUND = false;
+      clearAuto();
+      refreshAll();
+    } finally {
+      LOOKUP_LOADING = false;
+      refreshAll();
+    }
+  }
+
+  // ===== Manual form =====
+  async function fetchAddressSuggestions(q) {
+    const res = await fetch(`/api/addresses?q=${encodeURIComponent(q)}&limit=${CFG.addrLimit}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    const arr = data.items || data.results || [];
+    return Array.isArray(arr) ? arr : [];
+  }
+
+  function buildSuggestionsBox() {
+    return el("div", { class:"suggestions" });
+  }
+
+  function showSuggestions(box, items, onPick) {
+    box.innerHTML = "";
+    for (const t of items) {
+      const b = el("button", { type:"button", class:"sitem", text:t });
+      b.addEventListener("click", () => onPick(t));
+      box.appendChild(b);
+    }
+    box.classList.add("show");
+  }
+
+  function hideSuggestions(box) {
+    box.classList.remove("show");
+  }
+
+  function attachAddressAutocomplete(inputEl) {
+    const box = buildSuggestionsBox();
+    inputEl.parentElement.appendChild(box);
+
+    let t = null;
+    const update = () => {
+      const q = inputEl.value.trim();
+      clearTimeout(t);
+      if (q.length < CFG.addrMinChars) { hideSuggestions(box); return; }
+
+      t = setTimeout(async () => {
+        const items = await fetchAddressSuggestions(q);
+        if (!items.length) { hideSuggestions(box); return; }
+        showSuggestions(box, items, (picked) => {
+          inputEl.value = picked;
+          hideSuggestions(box);
+          refreshAll();
+        });
+      }, 180);
+    };
+
+    inputEl.addEventListener("input", () => { update(); refreshAll(); });
+    inputEl.addEventListener("focus", update);
+    inputEl.addEventListener("keydown", (e) => { if (e.key === "Escape") hideSuggestions(box); });
+
+    document.addEventListener("click", (e) => {
+      if (!inputEl.parentElement.contains(e.target)) hideSuggestions(box);
+    });
+  }
+
+  function renumberAddresses() {
+    const blocks = $$(".address-block", $("#addresses"));
+    blocks.forEach((block, i) => {
+      const badge = $(".badge", block);
+      if (i === 0) { badge.classList.add("hidden"); }
+      else { badge.classList.remove("hidden"); badge.textContent = `Adrese ${i+1}`; }
+
+      const delBtn = $(".delete-address-btn", block);
+      if (delBtn) {
+        const hide = (i === 0);
+        delBtn.classList.toggle("hidden", hide);
+        delBtn.disabled = hide;
+      }
+    });
+  }
+
+  function updateMeterDeleteButtons(addressBlock) {
+    const rows = $$(".meter-row", addressBlock);
+    rows.forEach((r, idx) => {
+      const btn = $(".del-btn", r);
+      if (!btn) return;
+      btn.classList.toggle("hidden", idx < CFG.meterDeleteShownFromIndex);
+    });
+  }
+
+  function createMeterRow(addressBlock) {
+    const row = el("div", { class:"meter-row" });
+
+    const nrInput = el("input", { type:"text", inputmode:"numeric", placeholder:"", "data-role":"meterNr" });
+    nrInput.addEventListener("input", () => {
+      nrInput.value = nrInput.value.replace(/\D/g, "");
+      refreshAll();
+    });
+
+    const valInput = el("input", { type:"text", inputmode:"decimal", placeholder:"", "data-role":"reading" });
+    valInput.addEventListener("input", () => {
+      valInput.value = normalizeReadingInput(valInput.value);
+      refreshAll();
+    });
+
+    const f1 = el("div", { class:"field meterNrField" }, [
+      el("label", { text:"Skaitītāja Nr" }),
+      nrInput
+    ]);
+
+    const f2 = el("div", { class:"field readingField" }, [
+      el("label", { text:"Rādījums" }),
+      valInput
+    ]);
+
+    const delBtn = el("button", {
+      type:"button",
+      class:"del-btn hidden",
+      title:"Dzēst skaitītāju",
+      onclick: () => {
+        row.remove();
+        updateMeterDeleteButtons(addressBlock);
+        refreshAll();
+      }
+    }, [el("span", { text:"✕" })]);
+
+    const delCell = el("div", { class:"delCell" }, [delBtn]);
+
+    row.append(f1, f2, delCell);
+    return row;
+  }
+
+  function createAddressBlock() {
+    const block = el("div", { class:"address-block" });
+
+    const badge = el("div", { class:"badge", text:"Adrese 1" });
+
+    const removeAddressBtn = el("button", {
+      type:"button",
+      class:"delete-address-btn hidden",
+      text:"Dzēst adresi",
+      onclick: () => {
+        const all = $$(".address-block", $("#addresses"));
+        if (all.length <= 1) return;
+        block.remove();
+        renumberAddresses();
+        refreshAll();
+      }
+    });
+
+    const head = el("div", { class:"address-head" }, [badge, removeAddressBtn]);
+
+    const addressInput = el("input", {
+      type:"text",
+      placeholder:"",
+      "data-role":"addressText",
+      autocomplete:"off"
+    });
+
+    const addressField = el("div", { class:"field" }, [
+      el("label", { text:"Adrese" }),
+      addressInput
+    ]);
+
+    const metersHost = el("div", { class:"meters" });
+    metersHost.appendChild(createMeterRow(block));
+
+    const addMeterBtn = el("button", {
+      type:"button",
+      class:"btn-add-meter",
+      text:"+ Pievienot skaitītāju",
+      onclick: () => {
+        metersHost.appendChild(createMeterRow(block));
+        updateMeterDeleteButtons(block);
+        refreshAll();
+      }
+    });
+
+    block.append(head, addressField, metersHost, addMeterBtn);
+
+    attachAddressAutocomplete(addressInput);
+    addressInput.addEventListener("input", refreshAll);
+
+    updateMeterDeleteButtons(block);
+    return block;
+  }
+
+  function initAddresses() {
+    const host = $("#addresses");
+    host.innerHTML = "";
+    host.appendChild(createAddressBlock());
+    renumberAddresses();
+  }
+
+  function buildLinesManual() {
+    const lines = [];
+    const blocks = $$(".address-block", $("#addresses"));
+    for (const block of blocks) {
+      const adrese = ($("input[data-role='addressText']", block).value || "").trim();
+      const meterRows = $$(".meter-row", block);
+
+      for (const r of meterRows) {
+        const meter = ($("input[data-role='meterNr']", r).value || "").trim();
+        const readingRaw = ($("input[data-role='reading']", r).value || "").trim();
+        lines.push({ adrese, skaititaja_numurs: meter, radijums_raw: readingRaw });
+      }
+    }
+    return lines;
+  }
+
+  function buildLinesLookup() {
+    const rows = $$(".auto-meter-row", $("#autoAddresses"));
+    const out = [];
+    for (const r of rows) {
+      const meter = r.querySelector("input[readonly]").value;
+      const last = parseReading($("input[data-role='last']", r).value);
+      const curRaw = $("input[data-role='new']", r).value;
+      const curNorm = normalizeReadingInput(curRaw);
+      out.push({ meter_no: meter, previous_reading: last, reading: curNorm });
+    }
+    return out;
+  }
+
+  function getBlockingReasons() {
+    const reasons = [];
+    const abon = readAbonentaKods();
+    const contract = readContractNr();
+
+    $("#errAbonents").classList.toggle("show", !!abon && !CFG.abonRegex.test(abon));
+    $("#errContract").classList.toggle("show", MODE === "lookup" && !!contract === false);
+
+    if (!CFG.abonRegex.test(abon)) reasons.push("Abonenta numuram jābūt 8 cipariem.");
+
+    if (MODE === "lookup") {
+      if (!contract) reasons.push("Līguma numurs ir obligāts.");
+      if (LOOKUP_LOADING) reasons.push("Notiek datu meklēšana… uzgaidi.");
+      if (CFG.abonRegex.test(abon) && contract && !LOOKUP_FOUND) reasons.push("Dati nav atrasti. Pārbaudi ievadi vai izvēlies manuālo ievadi.");
+
+      if (LOOKUP_FOUND) {
+        const rows = buildLinesLookup();
+        if (!rows.length) reasons.push("Nav atrasts neviens skaitītājs.");
+
+        rows.forEach((ln, idx) => {
+          const rNorm = normalizeReadingInput(ln.reading || "");
+          if (!rNorm) reasons.push(`Skaitītājs ${idx+1}: nav ievadīts jaunais rādījums.`);
+          else if (!CFG.readingRegex.test(rNorm)) reasons.push(`Skaitītājs ${idx+1}: rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
+        });
+      }
+      return reasons;
+    }
+
+    // Manual mode
+    const blocks = $$(".address-block", $("#addresses"));
+    if (blocks.length < 1) reasons.push("Nav pievienota neviena adrese.");
+
+    blocks.forEach((block, ai) => {
+      const addr = ($("input[data-role='addressText']", block).value || "").trim();
+      if (!addr) reasons.push(`Adrese ${ai+1}: nav ievadīta adrese.`);
+    });
+
+    const lines = buildLinesManual().filter(x => x.adrese || x.skaititaja_numurs || x.radijums_raw);
+    if (!lines.length) reasons.push("Nav ievadīts neviens skaitītājs.");
+
+    lines.forEach((ln, idx) => {
+      if (!ln.adrese) return;
+      if (!CFG.meterNrRegex.test(ln.skaititaja_numurs)) reasons.push(`Skaitītājs ${idx+1}: Nr jābūt tikai cipariem.`);
+      const rNorm = normalizeReadingInput(ln.radijums_raw);
+      if (!CFG.readingRegex.test(rNorm)) reasons.push(`Skaitītājs ${idx+1}: rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
+    });
+
+    return reasons;
+  }
+
+  function updateSubmitState() {
+    const reasons = getBlockingReasons();
+    const ok = reasons.length === 0;
+
+    const btn = $("#submitBtn");
+    btn.classList.toggle("disabled", !ok);
+    btn.setAttribute("aria-disabled", ok ? "false" : "true");
+
+    if (ok) {
+      $("#submitInfo").classList.remove("show");
+      $("#submitInfo").innerHTML = "";
+    }
+  }
+
+  function showSubmitBlockedInfo() {
+    const reasons = getBlockingReasons();
+    const box = $("#submitInfo");
+    if (!reasons.length) { box.classList.remove("show"); box.innerHTML=""; return; }
+
+    box.innerHTML =
+      "<b>Kāpēc poga IESNIEGT ir neaktīva:</b><ul style='margin:8px 0 0 18px; padding:0;'>" +
+      reasons.map(r => `<li>${escapeHtml(r)}</li>`).join("") +
+      "</ul>";
+    box.classList.add("show");
+  }
+
+  function switchToManual(){
+    MODE = "manual";
+    LOOKUP_FOUND = false;
+    LOOKUP_LOADING = false;
+    setLookupNotice(null, "");
+    clearAuto();
+
+    $("#manualSection").style.display = "";
+    initAddresses();
+    refreshAll();
+    $("#manualSection").scrollIntoView({ behavior:"smooth", block:"start" });
+  }
+
+  async function submit() {
+    updateSubmitState();
+    const btn = $("#submitBtn");
+    if (btn.classList.contains("disabled")) { showSubmitBlockedInfo(); return; }
+
+    btn.classList.add("disabled");
+    btn.setAttribute("aria-disabled", "true");
+
+    const KEY = "client_submission_id_current";
+    let cid = sessionStorage.getItem(KEY);
+    if (!cid) {
+      cid = crypto.randomUUID();
+      sessionStorage.setItem(KEY, cid);
+    }
+
+    modalStateSending();
+
+    const abon = readAbonentaKods();
+    const contract = readContractNr();
+
+    let payload = null;
+
+    if (MODE === "lookup") {
+      const lines = buildLinesLookup().map(x => ({
+        meter_no: x.meter_no,
+        reading: normalizeReadingInput(x.reading)
+      }));
+      payload = {
+        mode: "lookup",
+        abonenta_numurs: abon,
+        contract_nr: contract,
+        lines,
+        website: "",
+        client_submission_id: cid
+      };
+    } else {
+      const lines = buildLinesManual()
+        .filter(x => x.adrese || x.skaititaja_numurs || x.radijums_raw)
+        .map(ln => ({
+          adrese: ln.adrese,
+          skaititaja_numurs: ln.skaititaja_numurs,
+          radijums: normalizeReadingInput(ln.radijums_raw)
+        }));
+      payload = {
+        mode: "manual",
+        abonenta_numurs: abon,
+        lines,
+        website: "",
+        client_submission_id: cid
+      };
+    }
+
+    try {
+      const res = await fetch("/api/submit", {
+        method: "POST",
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      let j = null;
+      try { j = await res.json(); } catch { j = null; }
+
+      if (!res.ok || !j || j.ok !== true) {
+        const msg = (j && j.error) ? j.error : "Neizdevās nosūtīt. Lūdzu, mēģini vēlreiz.";
+        modalStateError(msg);
+        btn.classList.remove("disabled");
+        btn.setAttribute("aria-disabled", "false");
+        return;
+      }
+
+      sessionStorage.removeItem(KEY);
+      modalStateSuccess();
+    } catch (e) {
+      modalStateError("Savienojuma problēma. Lūdzu, mēģini vēlreiz.");
+      btn.classList.remove("disabled");
+      btn.setAttribute("aria-disabled", "false");
+    }
+  }
+
+  function refreshAll(){ updateSubmitState(); }
+
+  function resetFormAll(){
+    $$("#abonentaCodeBoxes input").forEach(i => i.value = "");
+    $("#contractNr").value = "";
+
+    setLookupNotice(null, "");
+    clearAuto();
+    $("#submitInfo").classList.remove("show");
+    $("#submitInfo").innerHTML = "";
+
+    MODE = "lookup";
+    LOOKUP_FOUND = false;
+    LOOKUP_LOADING = false;
+
+    $("#manualSection").style.display = "none";
+    $("#addresses").innerHTML = "";
+    refreshAll();
+  }
+
+  function init(){
+    initCodeBoxes();
+
+    $("#contractNr").addEventListener("input", () => {
+      if (MODE === "lookup") scheduleLookup();
+      refreshAll();
+    });
+
+    $("#manualSwitchBtn").addEventListener("click", switchToManual);
+
+    $("#submitBtn").addEventListener("click", () => {
+      if ($("#submitBtn").classList.contains("disabled")) showSubmitBlockedInfo();
+      else submit();
+    });
+
+    refreshWindowNotice();
+    refreshAll();
+  }
+
+  init();
+</script>
+</body>
+</html>
