@@ -16,7 +16,6 @@
       --radius:14px;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
-
     *{ box-sizing:border-box; }
     body{ background:var(--bg); margin:0; padding:24px; color:#111; }
     .wrap{ max-width:980px; margin:0 auto; }
@@ -27,7 +26,6 @@
       padding:18px;
       box-shadow:0 6px 18px rgba(0,0,0,.06);
     }
-
     h1{ margin:0 0 14px; font-size:20px; font-weight:900; }
     .section-title{ font-size:14px; font-weight:900; margin:14px 0 8px; color:#1b1b1b; }
 
@@ -87,6 +85,7 @@
     }
     .infoIcon:hover{ background:#eef3f8; }
 
+    /* 8 ciparu lauki */
     .code-boxes{ display:flex; gap:8px; width:fit-content; max-width:100%; overflow:hidden; }
     .code-boxes input{
       width:40px;height:46px;flex:0 0 40px;
@@ -189,7 +188,7 @@
     }
     .infoBox.show{ display:block; }
 
-    /* auto section */
+    /* AUTO section (pēc noklusējuma slēpts) */
     #autoSection{ display:none; margin-top:10px; }
     .auto-meter-row{
       display:grid;
@@ -294,6 +293,7 @@
       <div class="error" id="errContract">Lūdzu ievadi līguma numuru.</div>
     </div>
 
+    <!-- tikai IEVADĪT -->
     <div class="btn-row">
       <button class="btn-secondary" id="lookupBtn" type="button">IEVADĪT</button>
     </div>
@@ -318,10 +318,10 @@
   </div>
 </div>
 
-<!-- Submit modal -->
+<!-- Submit popup -->
 <div id="submitModal">
   <div id="submitModalBackdrop"></div>
-  <div id="submitModalCard" role="dialog" aria-modal="true">
+  <div id="submitModalCard" role="dialog" aria-modal="true" aria-labelledby="submitModalTitle">
     <div id="submitModalTitle">SŪTU…</div>
     <div id="submitModalText">Lūdzu uzgaidi, notiek rādījumu nosūtīšana.</div>
     <div id="submitModalActions">
@@ -331,10 +331,10 @@
   </div>
 </div>
 
-<!-- Not found modal -->
+<!-- Lookup not found modal -->
 <div id="notFoundModal">
   <div id="notFoundBackdrop"></div>
-  <div id="notFoundCard" role="dialog" aria-modal="true">
+  <div id="notFoundCard" role="dialog" aria-modal="true" aria-labelledby="notFoundTitle">
     <div id="notFoundTitle">Klients netika atrasts</div>
     <div id="notFoundText">
       Pārbaudiet abonenta kodu un līguma numuru. Ja nevarat atrast datus rēķinā, ievadiet rādījumus manuāli.
@@ -349,7 +349,7 @@
 <!-- Help modal -->
 <div id="helpModal">
   <div id="helpBackdrop"></div>
-  <div id="helpCard" role="dialog" aria-modal="true">
+  <div id="helpCard" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
     <div id="helpTitle">Kur atrast abonenta kodu un līguma numuru?</div>
     <div id="helpText">Abonenta kods un līguma numurs ir norādīts rēķina augšējā labajā stūrī.</div>
     <img id="helpImg" src="/assets/rekins-paraugs.png" alt="Rēķina fragments" />
@@ -406,8 +406,8 @@
     const firstDot = s.indexOf('.');
     if (firstDot !== -1) {
       s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, '');
-      const [a, b=''] = s.split('.');
-      s = a + '.' + b.slice(0, 2);
+      const parts = s.split('.');
+      s = parts[0] + '.' + (parts[1] || '').slice(0, 2);
     }
     return s;
   }
@@ -419,7 +419,8 @@
     return Number.isFinite(n) ? n : null;
   }
 
-  let MODE = "lookup";
+  // ===== State =====
+  let MODE = "lookup"; // lookup | manual
   let LOOKUP_LOADING = false;
   let LOOKUP_FOUND = false;
   let LOOKUP_ATTEMPTED = false;
@@ -501,6 +502,15 @@
       inp.addEventListener("input", () => {
         inp.value = inp.value.replace(/\D/g, "").slice(0,1);
         if (inp.value && i < 7) host.children[i+1].focus();
+
+        // reset pēc jebkādas izmaiņas
+        if (MODE === "lookup") {
+          LOOKUP_FOUND = false;
+          LOOKUP_ATTEMPTED = false;
+          LOOKUP_LOADING = false;
+          setLookupNotice(null, "");
+          clearAuto();
+        }
         refreshAll();
       });
 
@@ -514,6 +524,14 @@
         const digits = (text || "").replace(/\D/g, "").slice(0,8);
         for (let j=0; j<8; j++) host.children[j].value = digits[j] || "";
         (host.children[Math.min(digits.length,7)] || host.children[7]).focus();
+
+        if (MODE === "lookup") {
+          LOOKUP_FOUND = false;
+          LOOKUP_ATTEMPTED = false;
+          LOOKUP_LOADING = false;
+          setLookupNotice(null, "");
+          clearAuto();
+        }
         refreshAll();
       });
 
@@ -524,16 +542,14 @@
   function readAbonentaKods() { return $$("#abonentaCodeBoxes input").map(i => i.value.trim()).join(""); }
   function readContractNr() { return String($("#contractNr").value || "").trim(); }
 
+  // ===== AUTO rendering =====
   function clearAuto(){
     $("#autoAddresses").innerHTML = "";
     $("#autoSection").style.display = "none";
   }
 
   function renderAuto(addresses){
-    const autoSec = document.getElementById("autoSection");
-    const host = document.getElementById("autoAddresses");
-    if (!autoSec || !host) throw new Error("HTML trūkst #autoSection vai #autoAddresses");
-
+    const host = $("#autoAddresses");
     host.innerHTML = "";
 
     addresses.forEach((a, idx) => {
@@ -599,7 +615,8 @@
       host.appendChild(block);
     });
 
-    $("#autoSection").style.display = "";
+    // ✅ FORCE SHOW (galvenais fix)
+    $("#autoSection").style.display = "block";
   }
 
   async function runLookup(){
@@ -610,14 +627,13 @@
     const contract = readContractNr();
 
     LOOKUP_FOUND = false;
-    LOOKUP_LOADING = false;
     clearAuto();
 
     $("#errAbonents").classList.toggle("show", !!abon && !CFG.abonRegex.test(abon));
     $("#errContract").classList.toggle("show", !!contract === false);
 
     if (!CFG.abonRegex.test(abon) || !contract){
-      setLookupNotice("bad", "<b>Lūdzu ievadi abonenta kodu (8 cipari) un līguma numuru.</b>");
+      setLookupNotice("bad", "<b>Lūdzu ievadi abonenta kodu (8 cipari) un līguma numuru, tad nospied IEVADĪT.</b>");
       refreshAll();
       return;
     }
@@ -647,11 +663,11 @@
         return;
       }
 
-      LOOKUP_FOUND = true;
       setLookupNotice("good", "<b>Dati atrasti.</b> Ievadi jaunos rādījumus visiem skaitītājiem.");
 
       try {
         renderAuto(j.addresses);
+        LOOKUP_FOUND = true;
         document.getElementById("autoSection").scrollIntoView({ behavior:"smooth", block:"start" });
       } catch (e) {
         console.error("renderAuto failed", e, j);
@@ -662,7 +678,7 @@
       }
 
       refreshAll();
-    } catch (e) {
+    } catch {
       setLookupNotice("bad", "<b>Neizdevās veikt meklēšanu.</b> Pamēģini vēlreiz.");
       LOOKUP_FOUND = false;
       clearAuto();
@@ -752,41 +768,28 @@
   function createMeterRow(addressBlock) {
     const row = el("div", { class:"meter-row" });
 
-    const nrInput = el("input", { type:"text", inputmode:"numeric", placeholder:"", "data-role":"meterNr" });
+    const nrInput = el("input", { type:"text", inputmode:"numeric", "data-role":"meterNr" });
     nrInput.addEventListener("input", () => {
       nrInput.value = nrInput.value.replace(/\D/g, "");
       refreshAll();
     });
 
-    const valInput = el("input", { type:"text", inputmode:"decimal", placeholder:"", "data-role":"reading" });
+    const valInput = el("input", { type:"text", inputmode:"decimal", "data-role":"reading" });
     valInput.addEventListener("input", () => {
       valInput.value = normalizeReadingInput(valInput.value);
       refreshAll();
     });
 
-    const f1 = el("div", { class:"field meterNrField" }, [
-      el("label", { text:"Skaitītāja Nr" }),
-      nrInput
-    ]);
-
-    const f2 = el("div", { class:"field readingField" }, [
-      el("label", { text:"Rādījums" }),
-      valInput
-    ]);
+    const f1 = el("div", { class:"field meterNrField" }, [ el("label", {text:"Skaitītāja Nr"}), nrInput ]);
+    const f2 = el("div", { class:"field readingField" }, [ el("label", {text:"Rādījums"}), valInput ]);
 
     const delBtn = el("button", {
       type:"button",
       class:"del-btn hidden",
-      title:"Dzēst skaitītāju",
-      onclick: () => {
-        row.remove();
-        updateMeterDeleteButtons(addressBlock);
-        refreshAll();
-      }
-    }, [el("span", { text:"✕" })]);
+      onclick: () => { row.remove(); updateMeterDeleteButtons(addressBlock); refreshAll(); }
+    }, [el("span", {text:"✕"})]);
 
     const delCell = el("div", { class:"delCell" }, [delBtn]);
-
     row.append(f1, f2, delCell);
     return row;
   }
@@ -811,17 +814,8 @@
 
     const head = el("div", { class:"address-head" }, [badge, removeAddressBtn]);
 
-    const addressInput = el("input", {
-      type:"text",
-      placeholder:"",
-      "data-role":"addressText",
-      autocomplete:"off"
-    });
-
-    const addressField = el("div", { class:"field" }, [
-      el("label", { text:"Adrese" }),
-      addressInput
-    ]);
+    const addressInput = el("input", { type:"text", "data-role":"addressText", autocomplete:"off" });
+    const addressField = el("div", { class:"field" }, [ el("label", {text:"Adrese"}), addressInput ]);
 
     const metersHost = el("div", { class:"meters" });
     metersHost.appendChild(createMeterRow(block));
@@ -838,10 +832,7 @@
     });
 
     block.append(head, addressField, metersHost, addMeterBtn);
-
     attachAddressAutocomplete(addressInput);
-    addressInput.addEventListener("input", refreshAll);
-
     updateMeterDeleteButtons(block);
     return block;
   }
@@ -874,10 +865,9 @@
     const out = [];
     for (const r of rows) {
       const meter = r.getAttribute("data-meter");
-      const last = parseReading($("input[data-role='last']", r).value);
       const curRaw = $("input[data-role='new']", r).value;
       const curNorm = normalizeReadingInput(curRaw);
-      out.push({ meter_no: meter, previous_reading: last, reading: curNorm });
+      out.push({ meter_no: meter, reading: curNorm });
     }
     return out;
   }
@@ -895,13 +885,17 @@
     if (MODE === "lookup") {
       if (!contract) reasons.push("Līguma numurs ir obligāts.");
 
-      if (!LOOKUP_ATTEMPTED && CFG.abonRegex.test(abon) && contract) {
+      if (CFG.abonRegex.test(abon) && contract && !LOOKUP_ATTEMPTED) {
         reasons.push("Nospied IEVADĪT, lai ielādētu skaitītājus.");
         return reasons;
       }
 
       if (LOOKUP_LOADING) reasons.push("Notiek datu meklēšana… uzgaidi.");
-      if (LOOKUP_ATTEMPTED && CFG.abonRegex.test(abon) && contract && !LOOKUP_FOUND) reasons.push("Dati nav atrasti. Pārbaudi ievadi vai izvēlies manuālo ievadi.");
+
+      if (LOOKUP_ATTEMPTED && CFG.abonRegex.test(abon) && contract && !LOOKUP_FOUND) {
+        reasons.push("Dati nav atrasti. Pārbaudi ievadi vai izvēlies manuālo ievadi.");
+        return reasons;
+      }
 
       if (LOOKUP_FOUND) {
         const rows = buildLinesLookup();
@@ -913,6 +907,7 @@
           else if (!CFG.readingRegex.test(rNorm)) reasons.push(`Skaitītājs ${idx+1}: rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
         });
       }
+
       return reasons;
     }
 
@@ -970,7 +965,7 @@
     LOOKUP_LOADING = false;
     setLookupNotice(null, "");
     clearAuto();
-    $("#manualSection").style.display = "";
+    $("#manualSection").style.display = "block";
     initAddresses();
     refreshAll();
     $("#manualSection").scrollIntoView({ behavior:"smooth", block:"start" });
@@ -999,30 +994,23 @@
     let payload = null;
 
     if (MODE === "lookup") {
-      const lines = buildLinesLookup().map(x => ({
-        meter_no: x.meter_no,
-        reading: normalizeReadingInput(x.reading)
-      }));
       payload = {
         mode: "lookup",
         abonenta_numurs: abon,
         contract_nr: contract,
-        lines,
+        lines: buildLinesLookup(),
         website: "",
         client_submission_id: cid
       };
     } else {
-      const lines = buildLinesManual()
-        .filter(x => x.adrese || x.skaititaja_numurs || x.radijums_raw)
-        .map(ln => ({
-          adrese: ln.adrese,
-          skaititaja_numurs: ln.skaititaja_numurs,
-          radijums: normalizeReadingInput(ln.radijums_raw)
-        }));
       payload = {
         mode: "manual",
         abonenta_numurs: abon,
-        lines,
+        lines: buildLinesManual().filter(x => x.adrese || x.skaititaja_numurs || x.radijums_raw).map(x => ({
+          adrese: x.adrese,
+          skaititaja_numurs: x.skaititaja_numurs,
+          radijums: normalizeReadingInput(x.radijums_raw)
+        })),
         website: "",
         client_submission_id: cid
       };
@@ -1030,17 +1018,14 @@
 
     try {
       const res = await fetch("/api/submit", {
-        method: "POST",
-        headers: { "Content-Type":"application/json" },
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
         body: JSON.stringify(payload)
       });
-
-      let j = null;
-      try { j = await res.json(); } catch { j = null; }
+      const j = await res.json().catch(()=>null);
 
       if (!res.ok || !j || j.ok !== true) {
-        const msg = (j && j.error) ? j.error : "Neizdevās nosūtīt. Lūdzu, mēģini vēlreiz.";
-        modalStateError(msg);
+        modalStateError((j && j.error) ? j.error : "Neizdevās nosūtīt.");
         btn.classList.remove("disabled");
         btn.setAttribute("aria-disabled", "false");
         return;
@@ -1048,7 +1033,7 @@
 
       sessionStorage.removeItem(KEY);
       modalStateSuccess();
-    } catch (e) {
+    } catch {
       modalStateError("Savienojuma problēma. Lūdzu, mēģini vēlreiz.");
       btn.classList.remove("disabled");
       btn.setAttribute("aria-disabled", "false");
@@ -1058,7 +1043,7 @@
   function refreshAll(){ updateSubmitState(); }
 
   function resetFormAll(){
-    $$("#abonentaCodeBoxes input").forEach(i => i.value = "");
+    $$("#abonentaCodeBoxes input").forEach(i => i.value="");
     $("#contractNr").value = "";
 
     MODE = "lookup";
@@ -1074,12 +1059,22 @@
     refreshAll();
   }
 
-  async function init(){
+  function init(){
     initCodeBoxes();
-    await refreshWindowNotice();
-    setLookupNotice(null, ""); // ✅ sākumā nekādu “Dati atrasti”
+    refreshWindowNotice();
+    setLookupNotice(null, "");
 
-    $("#contractNr").addEventListener("input", () => refreshAll());
+    $("#contractNr").addEventListener("input", () => {
+      if (MODE === "lookup") {
+        LOOKUP_FOUND = false;
+        LOOKUP_ATTEMPTED = false;
+        LOOKUP_LOADING = false;
+        setLookupNotice(null, "");
+        clearAuto();
+      }
+      refreshAll();
+    });
+
     $("#contractNr").addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -1090,8 +1085,7 @@
     $("#lookupBtn").addEventListener("click", () => runLookup());
 
     $("#addAddressBtn").addEventListener("click", () => {
-      const host = $("#addresses");
-      host.appendChild(createAddressBlock());
+      $("#addresses").appendChild(createAddressBlock());
       renumberAddresses();
       refreshAll();
     });
