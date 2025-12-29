@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const express = require('express');
 const helmet = require('helmet');
@@ -14,7 +15,6 @@ const ExcelJS = require('exceljs');
 
 const { Pool } = require('pg');
 const { DateTime } = require('luxon');
-const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 
@@ -25,7 +25,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const TZ = 'Europe/Riga';
 const ENFORCE_WINDOW = String(process.env.ENFORCE_WINDOW || '0') === '1';
 
-const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || '').trim(); // https://radijumi.jurmalasudens.lv
+const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || '').trim(); // e.g. https://xxxxx.up.railway.app or https://radijumi.jurmalasudens.lv
 
 const ADMIN_KEY = (process.env.ADMIN_KEY || '').trim();         // optional (only for /api/export.csv)
 const ADMIN_USER = process.env.ADMIN_USER || '';               // required for /admin/*
@@ -174,7 +174,7 @@ function pickSubscriberCode(body) {
   return null;
 }
 
-/* Contract number: free-form (various structures) */
+/* Contract number: free-form */
 function pickContractNr(body) {
   const v = body?.contract_nr ?? body?.contractNr ?? body?.contract;
   const s = String(v ?? '').trim();
@@ -199,7 +199,7 @@ function parseReading(value) {
   return s;
 }
 
-/* Diacritics helper (Ausekļa -> ausekla) */
+/* Diacritics helper */
 function stripDiacritics(s) {
   return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
@@ -260,7 +260,6 @@ function parseQuery(qRaw) {
   return { q, parts, nums, words };
 }
 
-// house number match: num not adjacent to other digits, optional one letter suffix (12a)
 function hasHouseNumber(key, num) {
   const re = new RegExp(`(^|[^0-9])${num}[a-z]?([^0-9]|$)`, 'i');
   return re.test(key);
@@ -361,10 +360,9 @@ app.get('/api/window', (req, res) => {
 });
 
 /* ✅ Addresses search (manual mode):
-   - if query has BOTH number(s) and word(s): street MUST start with words (prefix), and house number must match number(s)
-   - if only words: ONLY prefix (startsWith)
-   - if only number: match house number
-   - NO token-anywhere search */
+   - prefix-only for words
+   - optional "number + prefix" mode
+   - NO includes() search */
 app.get('/api/addresses', addressesLimiter, (req, res) => {
   const originError = enforceSameOriginSoft(req, res);
   if (originError) return;
@@ -378,20 +376,17 @@ app.get('/api/addresses', addressesLimiter, (req, res) => {
   const out = [];
   const limit = Math.min(parseInt(req.query.limit || '20', 10) || 20, 50);
 
-  // Special mode: "12 bu" => street prefix "bu" + house number 12
   if (nums.length && words.length) {
     const prefix = words.join(' ');
     for (const r of addrCache.rows) {
       if (!r.key.startsWith(prefix)) continue;
       if (!nums.every(n => hasHouseNumber(r.key, n))) continue;
-
       out.push(r.original);
       if (out.length >= limit) break;
     }
     return res.json({ ok: true, items: out, results: out });
   }
 
-  // Only words => prefix-only
   if (q && words.length && !nums.length) {
     for (const r of addrCache.rows) {
       if (r.key.startsWith(q)) {
@@ -402,7 +397,6 @@ app.get('/api/addresses', addressesLimiter, (req, res) => {
     return res.json({ ok: true, items: out, results: out });
   }
 
-  // Only number(s) => match by house number (use first)
   if (nums.length && !words.length) {
     const n0 = nums[0];
     for (const r of addrCache.rows) {
@@ -417,7 +411,7 @@ app.get('/api/addresses', addressesLimiter, (req, res) => {
   return res.json({ ok: true, items: [], results: [] });
 });
 
-/* ===================== LOOKUP: subscriber + contract -> meters + last reading ===================== */
+/* ===================== LOOKUP ===================== */
 app.get('/api/lookup', lookupLimiter, async (req, res) => {
   const originError = enforceSameOriginSoft(req, res);
   if (originError) return;
@@ -480,7 +474,7 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
   const hp = String(req.body.website || req.body.honeypot || '').trim();
   if (hp) return res.status(400).json({ ok: false, error: 'Rejected' });
 
-  const mode = String(req.body.mode || 'manual').trim().toLowerCase(); // 'lookup' | 'manual'
+  const mode = String(req.body.mode || 'manual').trim().toLowerCase();
   if (mode !== 'lookup' && mode !== 'manual') {
     return res.status(400).json({ ok:false, error:'Invalid mode' });
   }
@@ -501,7 +495,7 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Invalid client_submission_id' });
     }
   } else {
-    client_submission_id = uuidv4();
+    client_submission_id = crypto.randomUUID();
   }
 
   const ip = getClientIp(req);
@@ -521,7 +515,6 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
         return res.status(400).json({ ok:false, error:'Invalid contract_nr' });
       }
 
-      // Validate lines: meter_no + reading
       const cleanLines = [];
       for (const l of rawLines) {
         const meter_no = normalizeMeterNo(l.meter_no ?? l.skaititaja_numurs ?? l.skaititajaNr);
@@ -568,7 +561,6 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
 
       const firstSnap = snap.rows[0];
 
-      // Upsert submission (idempotent)
       const insertSubmissionSql = `
         INSERT INTO submissions (
           client_submission_id, subscriber_code, contract_nr, billing_batch_id, client_name,
@@ -600,7 +592,6 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
 
       const submissionId = subRes.rows[0].id;
 
-      // Replace lines for idempotency
       await db.query('DELETE FROM submission_lines WHERE submission_id = $1', [submissionId]);
 
       const insertLineSql = `
@@ -656,7 +647,6 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
     }
 
     // ===== manual mode =====
-    // expects lines with {adrese, skaititaja_numurs, radijums}
     const cleanLines = [];
     for (const l of rawLines) {
       const address = String(l.adrese ?? l.address ?? '').trim();
@@ -680,7 +670,6 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
       cleanLines.push({ address, meter_no, reading: readingStr });
     }
 
-    // submission address: if multiple, store MULTI
     const addrSet = new Set(cleanLines.map(x => x.address));
     const submissionAddress = addrSet.size === 1 ? cleanLines[0].address : 'MULTI';
 
@@ -708,7 +697,6 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
 
     await db.query('DELETE FROM submission_lines WHERE submission_id = $1', [submissionId]);
 
-    // Note: requires submission_lines.address column (from migration)
     const insertLineSql = `
       INSERT INTO submission_lines (submission_id, meter_no, address, previous_reading, reading, consumption)
       VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6::numeric)
@@ -833,7 +821,6 @@ app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
 
-  // header row contains "Klienta kods" and "Līg. Nr."
   const headerRowIndex = rows.findIndex(r => Array.isArray(r) && r.includes('Klienta kods') && r.includes('Līg. Nr.'));
   if (headerRowIndex === -1) return res.status(400).send('Header not found');
 
@@ -963,22 +950,7 @@ app.post('/admin/clear', requireBasicAuth, async (req, res) => {
     await client.query('BEGIN');
     await client.query('TRUNCATE TABLE submission_lines, submissions RESTART IDENTITY CASCADE;');
     await client.query('COMMIT');
-
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.end(`
-<!doctype html>
-<html lang="lv">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OK</title>
-<style>body{font-family:system-ui;margin:24px}a{display:inline-block;margin-top:12px}</style>
-</head>
-<body>
-  <h2>OK — visi iesniegumi dzēsti</h2>
-  <div>DB tabulas ir iztīrītas (submissions + submission_lines).</div>
-  <a href="/admin">Atpakaļ uz admin</a>
-</body>
-</html>
-    `);
+    return res.redirect('/admin');
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch (_) {}
     console.error('admin clear error', e);
@@ -1079,7 +1051,6 @@ function toExcelDate(v) {
 }
 
 function findHeaderMap(ws, headersWanted) {
-  // scan first 15 rows for header row
   for (let r = 1; r <= 15; r++) {
     const row = ws.getRow(r);
     const map = new Map();
@@ -1090,14 +1061,9 @@ function findHeaderMap(ws, headersWanted) {
       const s = (v && typeof v === 'object' && v.richText)
         ? v.richText.map(x => x.text).join('')
         : (v == null ? '' : String(v));
-
       const t = s.trim();
       if (!t) continue;
-
-      if (headersWanted.includes(t)) {
-        map.set(t, c);
-        hit++;
-      }
+      if (headersWanted.includes(t)) { map.set(t, c); hit++; }
     }
 
     if (hit >= Math.min(5, headersWanted.length)) {
@@ -1144,7 +1110,6 @@ app.get('/admin/export.xlsx', requireBasicAuth, async (req, res) => {
       sql += ` WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2`;
       params.push(TZ, month);
     }
-
     sql += ` ORDER BY s.submitted_at DESC, s.id DESC, l.id ASC`;
 
     const data = await client.query(sql, params);
@@ -1171,7 +1136,7 @@ app.get('/admin/export.xlsx', requireBasicAuth, async (req, res) => {
     const map = headerInfo.map;
     const startRow = headerRow + 1;
 
-    // Clear old data below header (soft clear only mapped columns)
+    // Clear old data
     const maxClear = Math.max(ws.rowCount, startRow + 1500);
     for (let i = startRow; i <= maxClear; i++) {
       const row = ws.getRow(i);
@@ -1182,7 +1147,6 @@ app.get('/admin/export.xlsx', requireBasicAuth, async (req, res) => {
       row.commit();
     }
 
-    // Fill
     let rowIdx = startRow;
     for (const x of data.rows) {
       const row = ws.getRow(rowIdx);
