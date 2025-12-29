@@ -420,12 +420,13 @@
         <button type="button" class="infoIcon" id="helpBtn2" aria-label="Kur atrast abonenta kodu un līguma numuru?">i</button>
       </div>
       <input id="contractNr" type="text" autocomplete="off" placeholder="Ievadi līguma numuru" />
-      <div class="hint">Ja klients nav atrodams, vari izvēlēties manuālo ievadi.</div>
+      <div class="hint">Ievadi abonenta kodu un līguma numuru, tad nospied <b>IEVADĪT</b>.</div>
       <div class="error" id="errContract">Lūdzu ievadi līguma numuru.</div>
     </div>
 
+    <!-- ✅ LOOKUP only on button -->
     <div class="btn-row">
-      <button class="btn-secondary" id="manualSwitchBtn" type="button">Ievadīt manuāli</button>
+      <button class="btn-secondary" id="lookupBtn" type="button">IEVADĪT</button>
     </div>
 
     <!-- AUTO (lookup) -->
@@ -434,7 +435,7 @@
       <div id="autoAddresses"></div>
     </div>
 
-    <!-- MANUAL (old flow) -->
+    <!-- MANUAL -->
     <div id="manualSection">
       <div class="section-title">Adreses un skaitītāji</div>
       <div id="addresses"></div>
@@ -524,9 +525,9 @@
 
   // ===== State =====
   let MODE = "lookup"; // 'lookup' | 'manual'
-  let LOOKUP_TIMER = null;
   let LOOKUP_LOADING = false;
   let LOOKUP_FOUND = false;
+  let LOOKUP_ATTEMPTED = false; // ✅ only after pressing IEVADĪT
 
   // ===== Modal (submit) =====
   let MODAL_LAST_STATE = "idle"; // idle|sending|success|error
@@ -614,38 +615,6 @@
     } catch {
       box.classList.remove("show");
       box.innerHTML = "";
-    }
-  }
-
-  // ===== 8 digit boxes =====
-  function initCodeBoxes() {
-    const host = $("#abonentaCodeBoxes");
-    host.innerHTML = "";
-    for (let i=0; i<8; i++) {
-      const inp = el("input", { type:"text", inputmode:"numeric", maxlength:"1", "aria-label":`Cipars ${i+1}` });
-
-      inp.addEventListener("input", () => {
-        inp.value = inp.value.replace(/\D/g, "").slice(0,1);
-        if (inp.value && i < 7) host.children[i+1].focus();
-        if (MODE === "lookup") scheduleLookup();
-        refreshAll();
-      });
-
-      inp.addEventListener("keydown", (e) => {
-        if (e.key === "Backspace" && !inp.value && i > 0) host.children[i-1].focus();
-      });
-
-      inp.addEventListener("paste", (e) => {
-        e.preventDefault();
-        const text = (e.clipboardData || window.clipboardData).getData("text");
-        const digits = (text || "").replace(/\D/g, "").slice(0,8);
-        for (let j=0; j<8; j++) host.children[j].value = digits[j] || "";
-        (host.children[Math.min(digits.length,7)] || host.children[7]).focus();
-        if (MODE === "lookup") scheduleLookup();
-        refreshAll();
-      });
-
-      host.appendChild(inp);
     }
   }
 
@@ -760,13 +729,9 @@
     $("#autoSection").style.display = "";
   }
 
-  function scheduleLookup(){
-    clearTimeout(LOOKUP_TIMER);
-    LOOKUP_TIMER = setTimeout(runLookup, 250);
-  }
-
   async function runLookup(){
-    if (MODE !== "lookup") return;
+    MODE = "lookup";
+    LOOKUP_ATTEMPTED = true;
 
     const abon = readAbonentaKods();
     const contract = readContractNr();
@@ -778,7 +743,7 @@
     $("#errContract").classList.toggle("show", !!contract === false);
 
     if (!CFG.abonRegex.test(abon) || !contract){
-      setLookupNotice(null, "");
+      setLookupNotice("bad", "<b>Lūdzu ievadi abonenta kodu (8 cipari) un līguma numuru.</b>");
       refreshAll();
       return;
     }
@@ -832,10 +797,7 @@
     return Array.isArray(arr) ? arr : [];
   }
 
-  function buildSuggestionsBox() {
-    return el("div", { class:"suggestions" });
-  }
-
+  function buildSuggestionsBox() { return el("div", { class:"suggestions" }); }
   function showSuggestions(box, items, onPick) {
     box.innerHTML = "";
     for (const t of items) {
@@ -845,10 +807,7 @@
     }
     box.classList.add("show");
   }
-
-  function hideSuggestions(box) {
-    box.classList.remove("show");
-  }
+  function hideSuggestions(box) { box.classList.remove("show"); }
 
   function attachAddressAutocomplete(inputEl) {
     const box = buildSuggestionsBox();
@@ -1050,8 +1009,14 @@
 
     if (MODE === "lookup") {
       if (!contract) reasons.push("Līguma numurs ir obligāts.");
+
+      if (!LOOKUP_ATTEMPTED && CFG.abonRegex.test(abon) && contract) {
+        reasons.push("Nospied IEVADĪT, lai ielādētu skaitītājus.");
+        return reasons;
+      }
+
       if (LOOKUP_LOADING) reasons.push("Notiek datu meklēšana… uzgaidi.");
-      if (CFG.abonRegex.test(abon) && contract && !LOOKUP_FOUND) reasons.push("Dati nav atrasti. Pārbaudi ievadi vai izvēlies manuālo ievadi.");
+      if (LOOKUP_ATTEMPTED && CFG.abonRegex.test(abon) && contract && !LOOKUP_FOUND) reasons.push("Dati nav atrasti. Pārbaudi ievadi vai izvēlies manuālo ievadi.");
 
       if (LOOKUP_FOUND) {
         const rows = buildLinesLookup();
@@ -1220,21 +1185,64 @@
     MODE = "lookup";
     LOOKUP_FOUND = false;
     LOOKUP_LOADING = false;
+    LOOKUP_ATTEMPTED = false;
 
     $("#manualSection").style.display = "none";
     $("#addresses").innerHTML = "";
     refreshAll();
   }
 
+  function initCodeBoxes() {
+    const host = $("#abonentaCodeBoxes");
+    host.innerHTML = "";
+    for (let i=0; i<8; i++) {
+      const inp = el("input", { type:"text", inputmode:"numeric", maxlength:"1", "aria-label":`Cipars ${i+1}` });
+
+      inp.addEventListener("input", () => {
+        inp.value = inp.value.replace(/\D/g, "").slice(0,1);
+        if (inp.value && i < 7) host.children[i+1].focus();
+        // vairs nemeklējam automātiski
+        refreshAll();
+      });
+
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Backspace" && !inp.value && i > 0) host.children[i-1].focus();
+      });
+
+      inp.addEventListener("paste", (e) => {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData("text");
+        const digits = (text || "").replace(/\D/g, "").slice(0,8);
+        for (let j=0; j<8; j++) host.children[j].value = digits[j] || "";
+        (host.children[Math.min(digits.length,7)] || host.children[7]).focus();
+        // vairs nemeklējam automātiski
+        refreshAll();
+      });
+
+      host.appendChild(inp);
+    }
+  }
+
   function init(){
     initCodeBoxes();
 
-    $("#contractNr").addEventListener("input", () => {
-      if (MODE === "lookup") scheduleLookup();
-      refreshAll();
+    // no auto lookup on typing
+    $("#contractNr").addEventListener("input", () => refreshAll());
+    $("#contractNr").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        $("#lookupBtn").click();
+      }
     });
 
-    $("#manualSwitchBtn").addEventListener("click", switchToManual);
+    $("#lookupBtn").addEventListener("click", () => runLookup());
+
+    $("#addAddressBtn").addEventListener("click", () => {
+      const host = $("#addresses");
+      host.appendChild(createAddressBlock());
+      renumberAddresses();
+      refreshAll();
+    });
 
     $("#submitBtn").addEventListener("click", () => {
       if ($("#submitBtn").classList.contains("disabled")) showSubmitBlockedInfo();
