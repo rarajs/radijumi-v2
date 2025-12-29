@@ -10,7 +10,7 @@
       --bg:#f6f7f9;
       --card:#ffffff;
       --border:#d8dde3;
-      --muted:#7b7b7b;
+      --muted:#6b7280;
       --blue:#1f5f86;
       --danger:#b00020;
       --radius:14px;
@@ -45,18 +45,12 @@
       width:100%;
     }
     input:focus{ border-color:var(--blue); }
-
-    input[readonly], input:disabled{
-      background:#f3f5f8;
-      color:#111;
-    }
+    input[readonly], input:disabled{ background:#f3f5f8; color:#111; }
 
     .hint{ font-size:12px; color:#666; margin-top:-2px; }
-
     .error{ font-size:12px; color:var(--danger); display:none; }
     .error.show{ display:block; }
 
-    /* Window notice */
     .noticeBox{
       margin:0 0 12px;
       border:1px solid #f0c9cf;
@@ -69,7 +63,6 @@
     }
     .noticeBox.show{ display:block; }
 
-    /* Lookup notice */
     .lookupBox{
       margin:0 0 12px;
       border:1px solid #cfd6de;
@@ -85,73 +78,26 @@
     .lookupBox.good{ border-color:#cfe8d6; background:#f3fff6; }
     .lookupBox.bad{ border-color:#f0c9cf; background:#fff5f7; color:#7a0016; }
 
-    /* Label row with info icon */
-    .labelRow{
-      display:flex;
-      align-items:center;
-      gap:8px;
-    }
+    .labelRow{ display:flex; align-items:center; gap:8px; }
     .infoIcon{
-      width:22px;
-      height:22px;
-      border-radius:999px;
-      border:2px solid #cfd6de;
-      background:#fff;
-      color:#1f5f86;
-      font-weight:1000;
-      line-height:18px;
-      cursor:pointer;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      padding:0;
-      flex:0 0 22px;
+      width:22px;height:22px;border-radius:999px;border:2px solid #cfd6de;
+      background:#fff;color:#1f5f86;font-weight:1000;line-height:18px;
+      cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+      padding:0;flex:0 0 22px;
     }
     .infoIcon:hover{ background:#eef3f8; }
-    .infoIcon:focus{ outline:3px solid rgba(31,95,134,.25); outline-offset:2px; }
 
-    /* 8 digit boxes */
-    .code-boxes{
-      display:flex;
-      flex-wrap:nowrap;
-      gap:8px;
-      width:fit-content;
-      max-width:100%;
-      overflow:hidden;
-    }
+    .code-boxes{ display:flex; gap:8px; width:fit-content; max-width:100%; overflow:hidden; }
     .code-boxes input{
-      width:40px;
-      height:46px;
-      flex:0 0 40px;
-      text-align:center;
-      font-size:18px;
-      font-weight:900;
-      border-radius:12px;
-      border:2px solid #cfd6de;
-      padding:0;
-      min-width:0;
+      width:40px;height:46px;flex:0 0 40px;
+      text-align:center;font-size:18px;font-weight:900;
+      border-radius:12px;border:2px solid #cfd6de;padding:0;
+    }
+    @media (max-width:520px){
+      .code-boxes{ width:100%; display:grid; grid-template-columns:repeat(8, minmax(0,1fr)); gap:6px; }
+      .code-boxes input{ width:100%; height:44px; font-size:16px; }
     }
 
-    @media (max-width: 520px){
-      .code-boxes{
-        width:100%;
-        display:grid;
-        grid-template-columns: repeat(8, minmax(0, 1fr));
-        gap:6px;
-      }
-      .code-boxes input{
-        width:100%;
-        flex:initial;
-        height:44px;
-        font-size:16px;
-      }
-    }
-    @media (max-width: 380px){
-      .code-boxes{ gap:5px; }
-      .code-boxes input{ height:42px; font-size:15px; border-radius:10px; }
-    }
-
-    /* buttons */
     .btn-row{ display:flex; gap:12px; margin-top:12px; flex-wrap:wrap; }
     .btn-secondary{
       border-radius:14px; border:2px solid #cfd6de; background:#fff;
@@ -165,7 +111,6 @@
     }
     .btn-primary.disabled{ opacity:.55; cursor:not-allowed; }
 
-    /* address blocks */
     .address-block{
       border:2px solid #e3e7ec;
       border-radius:18px;
@@ -174,15 +119,7 @@
       background:#fff;
       position:relative;
     }
-
-    .address-head{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:10px;
-      margin-bottom:8px;
-    }
-
+    .address-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
     .badge{
       font-size:12px; color:#1b1b1b; font-weight:900;
       background:#eef3f8; border-radius:999px; padding:6px 10px;
@@ -190,20 +127,16 @@
     .badge.hidden{ display:none; }
 
     .delete-address-btn{
-      border-radius:14px;
-      border:2px solid #f0c9cf;
-      background:#fff;
-      padding:10px 12px;
-      cursor:pointer;
-      font-weight:900;
-      color:var(--danger);
+      border-radius:14px; border:2px solid #f0c9cf; background:#fff;
+      padding:10px 12px; cursor:pointer; font-weight:900; color:var(--danger);
       white-space:nowrap;
     }
     .delete-address-btn.hidden{ display:none; }
     .delete-address-btn:disabled{ opacity:.35; cursor:not-allowed; }
 
-    /* Manual meters */
     .meters{ margin-top:10px; display:flex; flex-direction:column; gap:10px; }
+
+    /* manual meter row */
     .meter-row{
       display:grid;
       grid-template-columns: 1fr 1fr 56px;
@@ -213,62 +146,29 @@
     .meterNrField{ grid-column:1; }
     .readingField{ grid-column:2; }
     .delCell{ grid-column:3; display:flex; justify-content:flex-end; align-items:flex-end; }
-
     .del-btn{
-      width:42px;
-      height:42px;
-      border-radius:12px;
-      border:2px solid #f0c9cf;
-      background:#fff;
-      color:var(--danger);
-      cursor:pointer;
-      font-weight:1000;
+      width:42px;height:42px;border-radius:12px;border:2px solid #f0c9cf;
+      background:#fff;color:var(--danger);cursor:pointer;font-weight:1000;
     }
     .del-btn.hidden{ display:none; }
 
     .btn-add-meter{
-      border-radius:12px;
-      border:2px dashed #cfd6de;
-      background:#f9fbfd;
-      padding:10px 14px;
-      font-weight:900;
-      color:#1976d2;
-      cursor:pointer;
-      width:fit-content;
-      margin-top:8px;
+      border-radius:12px;border:2px dashed #cfd6de;background:#f9fbfd;
+      padding:10px 14px;font-weight:900;color:#1976d2;cursor:pointer;width:fit-content;margin-top:8px;
     }
     .btn-add-meter:hover{ background:#eef3f8; }
 
-    /* Mobile */
     @media (max-width:640px){
-      .meter-row{
-        grid-template-columns: 1fr;
-        grid-template-rows: auto auto auto;
-        align-items:stretch;
-      }
-      .meterNrField, .readingField, .delCell{ grid-column:auto; }
+      .meter-row{ grid-template-columns: 1fr; grid-template-rows:auto auto auto; }
       .delCell{ justify-content:stretch; }
-
-      .del-btn{
-        width:100%;
-        height:auto;
-        padding:12px 14px;
-        border-radius:14px;
-        text-align:center;
-      }
+      .del-btn{ width:100%; height:auto; padding:12px 14px; border-radius:14px; }
       .del-btn span{ display:none; }
       .del-btn::before{ content:"Dzēst skaitītāju"; }
-
-      .address-head{
-        flex-direction:column;
-        align-items:stretch;
-        gap:8px;
-      }
+      .address-head{ flex-direction:column; align-items:stretch; gap:8px; }
       .delete-address-btn{ width:100%; }
-      .badge{ width:fit-content; }
     }
 
-    /* Address autocomplete dropdown */
+    /* autocomplete */
     .suggestions{
       position:absolute; top:100%; left:0; right:0;
       background:#fff; border:1px solid var(--border); border-radius:14px;
@@ -278,30 +178,18 @@
     }
     .suggestions.show{ display:block; }
     .sitem{
-      width:100%;
-      text-align:left;
-      padding:10px 12px;
-      background:#fff;
-      border:none;
-      cursor:pointer;
-      font-size:13px;
-      line-height:1.25;
+      width:100%; text-align:left; padding:10px 12px; background:#fff; border:none;
+      cursor:pointer; font-size:13px; line-height:1.25;
     }
     .sitem:hover{ background:#eef3f8; }
 
     .infoBox{
-      margin-top:10px;
-      border:1px solid #f0c9cf;
-      background:#fff5f7;
-      border-radius:14px;
-      padding:10px 12px;
-      font-size:13px;
-      color:#7a0016;
-      display:none;
+      margin-top:10px;border:1px solid #f0c9cf;background:#fff5f7;border-radius:14px;
+      padding:10px 12px;font-size:13px;color:#7a0016;display:none;
     }
     .infoBox.show{ display:block; }
 
-    /* AUTO section */
+    /* auto section */
     #autoSection{ display:none; margin-top:10px; }
     .auto-meter-row{
       display:grid;
@@ -310,28 +198,17 @@
       align-items:end;
       margin-top:10px;
     }
-    .auto-meter-row.neg input[data-role="consumption"]{
-      color:var(--danger);
-      font-weight:1000;
-    }
-    @media (max-width:640px){
-      .auto-meter-row{ grid-template-columns: 1fr; }
-    }
+    .auto-meter-row.neg input[data-role="consumption"]{ color:var(--danger); font-weight:1000; }
+    @media (max-width:640px){ .auto-meter-row{ grid-template-columns: 1fr; } }
 
-    /* Submit modal */
+    /* submit modal */
     #submitModal { position: fixed; inset: 0; z-index: 9999; display:none; }
     #submitModalBackdrop { position: absolute; inset: 0; background: rgba(0,0,0,.35); }
     #submitModalCard{
-      position:absolute;
-      left:50%;
-      top:50%;
-      transform: translate(-50%,-50%);
+      position:absolute; left:50%; top:50%; transform: translate(-50%,-50%);
       width:min(420px, calc(100vw - 32px));
-      background:#fff;
-      border:1px solid #e5e7eb;
-      border-radius:16px;
-      padding:16px 16px 14px;
-      box-shadow: 0 18px 50px rgba(0,0,0,.18);
+      background:#fff; border:1px solid #e5e7eb; border-radius:16px;
+      padding:16px 16px 14px; box-shadow: 0 18px 50px rgba(0,0,0,.18);
     }
     #submitModalTitle{ font-weight:900; font-size:16px; margin:0 0 6px; }
     #submitModalText{ font-size:14px; color:#333; margin:0 0 12px; }
@@ -347,20 +224,14 @@
       #submitModalCloseBtn, #submitModalRetryBtn{ width:100%; }
     }
 
-    /* Not found modal */
+    /* not found modal */
     #notFoundModal { position: fixed; inset: 0; z-index: 9998; display:none; }
     #notFoundBackdrop { position: absolute; inset: 0; background: rgba(0,0,0,.35); }
     #notFoundCard{
-      position:absolute;
-      left:50%;
-      top:50%;
-      transform: translate(-50%,-50%);
+      position:absolute; left:50%; top:50%; transform: translate(-50%,-50%);
       width:min(520px, calc(100vw - 32px));
-      background:#fff;
-      border:1px solid #e5e7eb;
-      border-radius:16px;
-      padding:16px 16px 14px;
-      box-shadow: 0 18px 50px rgba(0,0,0,.18);
+      background:#fff; border:1px solid #e5e7eb; border-radius:16px;
+      padding:16px 16px 14px; box-shadow: 0 18px 50px rgba(0,0,0,.18);
     }
     #notFoundTitle{ font-weight:900; font-size:16px; margin:0 0 6px; color:#111; }
     #notFoundText{ font-size:14px; color:#333; margin:0 0 12px; }
@@ -372,16 +243,15 @@
     .btn-outline.primary{ border-color: var(--blue); color: var(--blue); }
     .btn-outline.danger{ border-color: var(--danger); color: var(--danger); }
     @media (max-width:640px){
-      #notFoundActions{ justify-content:stretch; flex-direction:column; }
+      #notFoundActions{ flex-direction:column; }
       .btn-outline{ width:100%; }
     }
 
-    /* Help modal */
+    /* help modal */
     #helpModal{ position:fixed; inset:0; z-index:9997; display:none; }
     #helpBackdrop{ position:absolute; inset:0; background:rgba(0,0,0,.35); }
     #helpCard{
-      position:absolute; left:50%; top:50%;
-      transform:translate(-50%,-50%);
+      position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
       width:min(560px, calc(100vw - 32px));
       background:#fff; border:1px solid #e5e7eb; border-radius:16px;
       padding:16px; box-shadow:0 18px 50px rgba(0,0,0,.18);
@@ -424,7 +294,6 @@
       <div class="error" id="errContract">Lūdzu ievadi līguma numuru.</div>
     </div>
 
-    <!-- ✅ LOOKUP only on button -->
     <div class="btn-row">
       <button class="btn-secondary" id="lookupBtn" type="button">IEVADĪT</button>
     </div>
@@ -439,7 +308,6 @@
     <div id="manualSection">
       <div class="section-title">Adreses un skaitītāji</div>
       <div id="addresses"></div>
-
       <div class="btn-row">
         <button class="btn-secondary" id="addAddressBtn" type="button">+ Pievienot adresi</button>
       </div>
@@ -450,10 +318,10 @@
   </div>
 </div>
 
-<!-- Submit popup -->
+<!-- Submit modal -->
 <div id="submitModal">
   <div id="submitModalBackdrop"></div>
-  <div id="submitModalCard" role="dialog" aria-modal="true" aria-labelledby="submitModalTitle">
+  <div id="submitModalCard" role="dialog" aria-modal="true">
     <div id="submitModalTitle">SŪTU…</div>
     <div id="submitModalText">Lūdzu uzgaidi, notiek rādījumu nosūtīšana.</div>
     <div id="submitModalActions">
@@ -463,10 +331,10 @@
   </div>
 </div>
 
-<!-- Lookup not found modal -->
+<!-- Not found modal -->
 <div id="notFoundModal">
   <div id="notFoundBackdrop"></div>
-  <div id="notFoundCard" role="dialog" aria-modal="true" aria-labelledby="notFoundTitle">
+  <div id="notFoundCard" role="dialog" aria-modal="true">
     <div id="notFoundTitle">Klients netika atrasts</div>
     <div id="notFoundText">
       Pārbaudiet abonenta kodu un līguma numuru. Ja nevarat atrast datus rēķinā, ievadiet rādījumus manuāli.
@@ -481,10 +349,10 @@
 <!-- Help modal -->
 <div id="helpModal">
   <div id="helpBackdrop"></div>
-  <div id="helpCard" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+  <div id="helpCard" role="dialog" aria-modal="true">
     <div id="helpTitle">Kur atrast abonenta kodu un līguma numuru?</div>
     <div id="helpText">Abonenta kods un līguma numurs ir norādīts rēķina augšējā labajā stūrī.</div>
-    <img id="helpImg" src="/assets/rekins-paraugs.png" alt="Rēķina fragments ar abonenta kodu un līguma numuru" />
+    <img id="helpImg" src="/assets/rekins-paraugs.png" alt="Rēķina fragments" />
     <div id="helpActions">
       <button type="button" class="btn-outline primary" id="helpCloseBtn">AIZVĒRT</button>
     </div>
@@ -509,8 +377,8 @@
     for (const [k, v] of Object.entries(attrs)) {
       if (k === "class") n.className = v;
       else if (k === "text") n.textContent = v;
-      else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2), v);
       else if (k === "value") n.value = v;
+      else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2), v);
       else n.setAttribute(k, v);
     }
     children.forEach(c => n.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
@@ -523,85 +391,91 @@
     }[c]));
   }
 
-  // ===== State =====
-  let MODE = "lookup"; // 'lookup' | 'manual'
+  function setLookupNotice(type, html){
+    const box = $("#lookupNotice");
+    box.classList.remove("show","loading","good","bad");
+    if (!html) { box.innerHTML=""; return; }
+    box.innerHTML = html;
+    box.classList.add("show");
+    if (type) box.classList.add(type);
+  }
+
+  function normalizeReadingInput(raw) {
+    let s = String(raw || '').trim().replace(',', '.');
+    s = s.replace(/[^\d.]/g, '');
+    const firstDot = s.indexOf('.');
+    if (firstDot !== -1) {
+      s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, '');
+      const [a, b=''] = s.split('.');
+      s = a + '.' + b.slice(0, 2);
+    }
+    return s;
+  }
+
+  function parseReading(v){
+    const s = String(v || '').trim().replace(',', '.');
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  let MODE = "lookup";
   let LOOKUP_LOADING = false;
   let LOOKUP_FOUND = false;
-  let LOOKUP_ATTEMPTED = false; // ✅ only after pressing IEVADĪT
+  let LOOKUP_ATTEMPTED = false;
 
-  // ===== Modal (submit) =====
-  let MODAL_LAST_STATE = "idle"; // idle|sending|success|error
+  // ===== Submit modal =====
+  let MODAL_LAST_STATE = "idle";
   function modalShow() { $('#submitModal').style.display = 'block'; }
   function modalHide() { $('#submitModal').style.display = 'none'; }
 
   function modalStateSending() {
-    MODAL_LAST_STATE = "sending";
+    MODAL_LAST_STATE="sending";
     modalShow();
-    $('#submitModalTitle').textContent = 'SŪTU…';
-    $('#submitModalText').textContent = 'Lūdzu uzgaidi, notiek rādījumu nosūtīšana.';
-    $('#submitModalCloseBtn').style.display = 'none';
-    $('#submitModalRetryBtn').style.display = 'none';
+    $('#submitModalTitle').textContent='SŪTU…';
+    $('#submitModalText').textContent='Lūdzu uzgaidi, notiek rādījumu nosūtīšana.';
+    $('#submitModalCloseBtn').style.display='none';
+    $('#submitModalRetryBtn').style.display='none';
   }
-
   function modalStateSuccess() {
-    MODAL_LAST_STATE = "success";
+    MODAL_LAST_STATE="success";
     modalShow();
-    $('#submitModalTitle').textContent = 'RĀDĪJUMS IESNIEGTS';
-    $('#submitModalText').textContent = 'Paldies! Jūsu rādījumi ir saņemti.';
-    $('#submitModalCloseBtn').style.display = 'inline-block';
-    $('#submitModalRetryBtn').style.display = 'none';
+    $('#submitModalTitle').textContent='RĀDĪJUMS IESNIEGTS';
+    $('#submitModalText').textContent='Paldies! Jūsu rādījumi ir saņemti.';
+    $('#submitModalCloseBtn').style.display='inline-block';
+    $('#submitModalRetryBtn').style.display='none';
   }
-
   function modalStateError(errText) {
-    MODAL_LAST_STATE = "error";
+    MODAL_LAST_STATE="error";
     modalShow();
-    $('#submitModalTitle').textContent = 'KĻŪDA';
-    $('#submitModalText').textContent = errText || 'Neizdevās nosūtīt. Lūdzu, mēģini vēlreiz.';
-    $('#submitModalCloseBtn').style.display = 'inline-block';
-    $('#submitModalRetryBtn').style.display = 'inline-block';
+    $('#submitModalTitle').textContent='KĻŪDA';
+    $('#submitModalText').textContent=errText || 'Neizdevās nosūtīt.';
+    $('#submitModalCloseBtn').style.display='inline-block';
+    $('#submitModalRetryBtn').style.display='inline-block';
   }
-
-  $('#submitModalCloseBtn').addEventListener('click', () => {
-    modalHide();
-    if (MODAL_LAST_STATE === "success") resetFormAll();
-  });
-  $('#submitModalRetryBtn').addEventListener('click', () => {
-    modalHide();
-    refreshAll();
-  });
+  $('#submitModalCloseBtn').addEventListener('click', () => { modalHide(); if (MODAL_LAST_STATE==="success") resetFormAll(); });
+  $('#submitModalRetryBtn').addEventListener('click', () => { modalHide(); refreshAll(); });
 
   // ===== Not found modal =====
-  function notFoundShow(){ $('#notFoundModal').style.display = 'block'; }
-  function notFoundHide(){ $('#notFoundModal').style.display = 'none'; }
-
+  function notFoundShow(){ $('#notFoundModal').style.display='block'; }
+  function notFoundHide(){ $('#notFoundModal').style.display='none'; }
   $('#notFoundBackdrop').addEventListener('click', notFoundHide);
-  $('#notFoundEditBtn').addEventListener('click', () => {
-    notFoundHide();
-    $('#contractNr').focus();
-  });
-  $('#notFoundManualBtn').addEventListener('click', () => {
-    notFoundHide();
-    switchToManual();
-  });
+  $('#notFoundEditBtn').addEventListener('click', () => { notFoundHide(); $('#contractNr').focus(); });
+  $('#notFoundManualBtn').addEventListener('click', () => { notFoundHide(); switchToManual(); });
 
   // ===== Help modal =====
-  function helpShow(){ $('#helpModal').style.display = 'block'; }
-  function helpHide(){ $('#helpModal').style.display = 'none'; }
-
+  function helpShow(){ $('#helpModal').style.display='block'; }
+  function helpHide(){ $('#helpModal').style.display='none'; }
   $('#helpBtn1').addEventListener('click', helpShow);
   $('#helpBtn2').addEventListener('click', helpShow);
   $('#helpBackdrop').addEventListener('click', helpHide);
   $('#helpCloseBtn').addEventListener('click', helpHide);
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { helpHide(); notFoundHide(); }
-  });
 
   async function refreshWindowNotice() {
     const box = $("#windowNotice");
     try {
       const res = await fetch("/api/window");
       const w = await res.json();
-
       if (!w.is_open && w.enforce) {
         box.innerHTML = "<b>Rādījumu iesniegšana no 25.datuma līdz mēneša beigām.</b>";
         box.classList.add("show");
@@ -618,49 +492,48 @@
     }
   }
 
-  function readAbonentaKods() {
-    return $$("#abonentaCodeBoxes input").map(i => i.value.trim()).join("");
-  }
-  function readContractNr(){
-    return String($("#contractNr").value || "").trim();
-  }
+  function initCodeBoxes() {
+    const host = $("#abonentaCodeBoxes");
+    host.innerHTML = "";
+    for (let i=0; i<8; i++) {
+      const inp = el("input", { type:"text", inputmode:"numeric", maxlength:"1", "aria-label":`Cipars ${i+1}` });
 
-  function setLookupNotice(type, html){
-    const box = $("#lookupNotice");
-    box.classList.remove("show", "loading", "good", "bad");
-    if (!html) { box.innerHTML=""; return; }
-    box.innerHTML = html;
-    box.classList.add("show");
-    if (type) box.classList.add(type);
-  }
+      inp.addEventListener("input", () => {
+        inp.value = inp.value.replace(/\D/g, "").slice(0,1);
+        if (inp.value && i < 7) host.children[i+1].focus();
+        refreshAll();
+      });
 
-  // normalize reading: allow decimal, comma->dot, max 2 decimals
-  function normalizeReadingInput(raw) {
-    let s = String(raw || '').trim().replace(',', '.');
-    s = s.replace(/[^\d.]/g, '');
-    const firstDot = s.indexOf('.');
-    if (firstDot !== -1) {
-      s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, '');
-      const [a, b=''] = s.split('.');
-      s = a + '.' + b.slice(0, 2);
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Backspace" && !inp.value && i > 0) host.children[i-1].focus();
+      });
+
+      inp.addEventListener("paste", (e) => {
+        e.preventDefault();
+        const text = (e.clipboardData || window.clipboardData).getData("text");
+        const digits = (text || "").replace(/\D/g, "").slice(0,8);
+        for (let j=0; j<8; j++) host.children[j].value = digits[j] || "";
+        (host.children[Math.min(digits.length,7)] || host.children[7]).focus();
+        refreshAll();
+      });
+
+      host.appendChild(inp);
     }
-    return s;
-  }
-  function parseReading(v){
-    const s = String(v || '').trim().replace(',', '.');
-    if (!s) return null;
-    const n = Number(s);
-    return Number.isFinite(n) ? n : null;
   }
 
-  // ===== AUTO rendering =====
+  function readAbonentaKods() { return $$("#abonentaCodeBoxes input").map(i => i.value.trim()).join(""); }
+  function readContractNr() { return String($("#contractNr").value || "").trim(); }
+
   function clearAuto(){
     $("#autoAddresses").innerHTML = "";
     $("#autoSection").style.display = "none";
   }
 
   function renderAuto(addresses){
-    const host = $("#autoAddresses");
+    const autoSec = document.getElementById("autoSection");
+    const host = document.getElementById("autoAddresses");
+    if (!autoSec || !host) throw new Error("HTML trūkst #autoSection vai #autoAddresses");
+
     host.innerHTML = "";
 
     addresses.forEach((a, idx) => {
@@ -737,6 +610,7 @@
     const contract = readContractNr();
 
     LOOKUP_FOUND = false;
+    LOOKUP_LOADING = false;
     clearAuto();
 
     $("#errAbonents").classList.toggle("show", !!abon && !CFG.abonRegex.test(abon));
@@ -775,9 +649,20 @@
 
       LOOKUP_FOUND = true;
       setLookupNotice("good", "<b>Dati atrasti.</b> Ievadi jaunos rādījumus visiem skaitītājiem.");
-      renderAuto(j.addresses);
+
+      try {
+        renderAuto(j.addresses);
+        document.getElementById("autoSection").scrollIntoView({ behavior:"smooth", block:"start" });
+      } catch (e) {
+        console.error("renderAuto failed", e, j);
+        LOOKUP_FOUND = false;
+        clearAuto();
+        setLookupNotice("bad", "<b>Kļūda attēlojot skaitītājus.</b> Ievadi manuāli.");
+        notFoundShow();
+      }
+
       refreshAll();
-    } catch {
+    } catch (e) {
       setLookupNotice("bad", "<b>Neizdevās veikt meklēšanu.</b> Pamēģini vēlreiz.");
       LOOKUP_FOUND = false;
       clearAuto();
@@ -988,7 +873,7 @@
     const rows = $$(".auto-meter-row", $("#autoAddresses"));
     const out = [];
     for (const r of rows) {
-      const meter = r.querySelector("input[readonly]").value;
+      const meter = r.getAttribute("data-meter");
       const last = parseReading($("input[data-role='last']", r).value);
       const curRaw = $("input[data-role='new']", r).value;
       const curNorm = normalizeReadingInput(curRaw);
@@ -1031,7 +916,7 @@
       return reasons;
     }
 
-    // Manual mode
+    // manual
     const blocks = $$(".address-block", $("#addresses"));
     if (blocks.length < 1) reasons.push("Nav pievienota neviena adrese.");
 
@@ -1085,7 +970,6 @@
     LOOKUP_LOADING = false;
     setLookupNotice(null, "");
     clearAuto();
-
     $("#manualSection").style.display = "";
     initAddresses();
     refreshAll();
@@ -1103,7 +987,7 @@
     const KEY = "client_submission_id_current";
     let cid = sessionStorage.getItem(KEY);
     if (!cid) {
-      cid = crypto.randomUUID();
+      cid = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + "-" + Math.random().toString(16).slice(2);
       sessionStorage.setItem(KEY, cid);
     }
 
@@ -1177,56 +1061,24 @@
     $$("#abonentaCodeBoxes input").forEach(i => i.value = "");
     $("#contractNr").value = "";
 
-    setLookupNotice(null, "");
-    clearAuto();
-    $("#submitInfo").classList.remove("show");
-    $("#submitInfo").innerHTML = "";
-
     MODE = "lookup";
     LOOKUP_FOUND = false;
     LOOKUP_LOADING = false;
     LOOKUP_ATTEMPTED = false;
+
+    setLookupNotice(null, "");
+    clearAuto();
 
     $("#manualSection").style.display = "none";
     $("#addresses").innerHTML = "";
     refreshAll();
   }
 
-  function initCodeBoxes() {
-    const host = $("#abonentaCodeBoxes");
-    host.innerHTML = "";
-    for (let i=0; i<8; i++) {
-      const inp = el("input", { type:"text", inputmode:"numeric", maxlength:"1", "aria-label":`Cipars ${i+1}` });
-
-      inp.addEventListener("input", () => {
-        inp.value = inp.value.replace(/\D/g, "").slice(0,1);
-        if (inp.value && i < 7) host.children[i+1].focus();
-        // vairs nemeklējam automātiski
-        refreshAll();
-      });
-
-      inp.addEventListener("keydown", (e) => {
-        if (e.key === "Backspace" && !inp.value && i > 0) host.children[i-1].focus();
-      });
-
-      inp.addEventListener("paste", (e) => {
-        e.preventDefault();
-        const text = (e.clipboardData || window.clipboardData).getData("text");
-        const digits = (text || "").replace(/\D/g, "").slice(0,8);
-        for (let j=0; j<8; j++) host.children[j].value = digits[j] || "";
-        (host.children[Math.min(digits.length,7)] || host.children[7]).focus();
-        // vairs nemeklējam automātiski
-        refreshAll();
-      });
-
-      host.appendChild(inp);
-    }
-  }
-
-  function init(){
+  async function init(){
     initCodeBoxes();
+    await refreshWindowNotice();
+    setLookupNotice(null, ""); // ✅ sākumā nekādu “Dati atrasti”
 
-    // no auto lookup on typing
     $("#contractNr").addEventListener("input", () => refreshAll());
     $("#contractNr").addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -1249,7 +1101,6 @@
       else submit();
     });
 
-    refreshWindowNotice();
     refreshAll();
   }
 
