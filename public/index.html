@@ -119,6 +119,9 @@
       position:relative;
     }
     .address-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+    .address-head.auto-head{ justify-content:flex-start; }
+    .auto-address-title{ font-size:13px; font-weight:1000; color:#111; }
+
     .badge{
       font-size:12px; color:#1b1b1b; font-weight:900;
       background:#eef3f8; border-radius:999px; padding:6px 10px;
@@ -197,7 +200,7 @@
       align-items:end;
       margin-top:10px;
     }
-    .auto-meter-row.neg input[data-role="consumption"]{ color:var(--danger); font-weight:1000; }
+    .auto-meter-row.neg input[data-role="cons"]{ color:var(--danger); font-weight:1000; }
     @media (max-width:640px){ .auto-meter-row{ grid-template-columns: 1fr; } }
 
     /* submit modal */
@@ -552,13 +555,48 @@
     const host = $("#autoAddresses");
     host.innerHTML = "";
 
-    addresses.forEach((a, idx) => {
+    function computeFromNew(row) {
+      const lastEl = $("input[data-role='last']", row);
+      const newEl = $("input[data-role='new']", row);
+      const consEl = $("input[data-role='cons']", row);
+
+      const prev = parseReading(lastEl.value);
+      const cur = parseReading(newEl.value);
+
+      if (prev == null || cur == null) {
+        if (!String(newEl.value || '').trim()) consEl.value = "";
+        row.classList.remove("neg");
+        return;
+      }
+
+      const diff = cur - prev;
+      consEl.value = diff.toFixed(2);
+      row.classList.toggle("neg", diff < 0);
+    }
+
+    function computeFromCons(row) {
+      const lastEl = $("input[data-role='last']", row);
+      const newEl = $("input[data-role='new']", row);
+      const consEl = $("input[data-role='cons']", row);
+
+      const prev = parseReading(lastEl.value);
+      const cons = parseReading(consEl.value);
+
+      if (prev == null || cons == null) return;
+
+      const cur = prev + cons;
+      newEl.value = cur.toFixed(2);
+      row.classList.toggle("neg", (cur - prev) < 0);
+    }
+
+    addresses.forEach((a) => {
       const addrText = String(a.address || "").trim();
 
       const block = el("div", { class:"address-block" });
-      const head = el("div", { class:"address-head" }, [
-        el("div", { class:"badge", text:`Adrese ${idx+1}` }),
-        el("div", { style:"font-size:13px;font-weight:900;color:#111;", text: addrText })
+
+      // ✅ address on the LEFT, no "Adrese 1/2/3" badge
+      const head = el("div", { class:"address-head auto-head" }, [
+        el("div", { class:"auto-address-title", text: addrText })
       ]);
 
       const metersHost = el("div", { class:"meters" });
@@ -566,12 +604,14 @@
       (a.meters || []).forEach((m) => {
         const meter = String(m.meter_serial || "").trim();
         const last = (m.last_reading == null) ? "" : String(m.last_reading);
+        const cNr = String(m.contract_nr || "").trim();
 
-        const row = el("div", { class:"auto-meter-row", "data-meter": meter });
+        const row = el("div", { class:"auto-meter-row", "data-meter": meter, "data-contract": cNr });
 
         const f1 = el("div", { class:"field" }, [
           el("label", { text:"Skaitītāja Nr" }),
-          el("input", { type:"text", readonly:"true", value: meter })
+          el("input", { type:"text", readonly:"true", value: meter }),
+          cNr ? el("div", { class:"hint", text:`Līgums: ${cNr}` }) : el("div", { class:"hint", text:"" })
         ]);
 
         const f2 = el("div", { class:"field" }, [
@@ -585,7 +625,7 @@
           newInp
         ]);
 
-        const consInp = el("input", { type:"text", readonly:"true", "data-role":"consumption" });
+        const consInp = el("input", { type:"text", inputmode:"decimal", placeholder:"Ievadi patēriņu", "data-role":"cons" });
         const f4 = el("div", { class:"field" }, [
           el("label", { text:"Patēriņš" }),
           consInp
@@ -593,17 +633,13 @@
 
         newInp.addEventListener("input", () => {
           newInp.value = normalizeReadingInput(newInp.value);
+          computeFromNew(row);
+          refreshAll();
+        });
 
-          const prev = parseReading($("input[data-role='last']", row).value);
-          const cur = parseReading(newInp.value);
-          if (prev == null || cur == null){
-            consInp.value = "";
-            row.classList.remove("neg");
-          } else {
-            const diff = cur - prev;
-            consInp.value = diff.toFixed(2);
-            row.classList.toggle("neg", diff < 0);
-          }
+        consInp.addEventListener("input", () => {
+          consInp.value = normalizeReadingInput(consInp.value);
+          computeFromCons(row);
           refreshAll();
         });
 
@@ -663,7 +699,7 @@
         return;
       }
 
-      setLookupNotice("good", "<b>Dati atrasti.</b> Ievadi jaunos rādījumus visiem skaitītājiem.");
+      setLookupNotice("good", "<b>Dati atrasti.</b> Ievadi jauno rādījumu vai patēriņu visiem skaitītājiem.");
 
       try {
         renderAuto(j.addresses);
@@ -863,11 +899,33 @@
   function buildLinesLookup() {
     const rows = $$(".auto-meter-row", $("#autoAddresses"));
     const out = [];
+
     for (const r of rows) {
-      const meter = r.getAttribute("data-meter");
-      const curRaw = $("input[data-role='new']", r).value;
-      const curNorm = normalizeReadingInput(curRaw);
-      out.push({ meter_no: meter, reading: curNorm });
+      const meter = r.getAttribute("data-meter") || "";
+      const contract = r.getAttribute("data-contract") || "";
+
+      const prev = parseReading($("input[data-role='last']", r).value);
+
+      const newRaw = $("input[data-role='new']", r).value;
+      const consRaw = $("input[data-role='cons']", r).value;
+
+      const newNorm = normalizeReadingInput(newRaw);
+      const consNorm = normalizeReadingInput(consRaw);
+
+      const newNum = parseReading(newNorm);
+      const consNum = parseReading(consNorm);
+
+      let reading = "";
+
+      if (newNorm && CFG.readingRegex.test(newNorm) && newNum != null) {
+        reading = newNorm;
+      } else if (consNorm && CFG.readingRegex.test(consNorm) && consNum != null && prev != null) {
+        reading = (prev + consNum).toFixed(2);
+      } else {
+        reading = "";
+      }
+
+      out.push({ meter_no: meter, contract_nr: contract, reading, _newRaw: newNorm, _consRaw: consNorm, _prev: prev });
     }
     return out;
   }
@@ -902,9 +960,38 @@
         if (!rows.length) reasons.push("Nav atrasts neviens skaitītājs.");
 
         rows.forEach((ln, idx) => {
-          const rNorm = normalizeReadingInput(ln.reading || "");
-          if (!rNorm) reasons.push(`Skaitītājs ${idx+1}: nav ievadīts jaunais rādījums.`);
-          else if (!CFG.readingRegex.test(rNorm)) reasons.push(`Skaitītājs ${idx+1}: rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
+          const newNorm = ln._newRaw || "";
+          const consNorm = ln._consRaw || "";
+          const prev = ln._prev;
+
+          const hasNew = !!newNorm;
+          const hasCons = !!consNorm;
+
+          if (!hasNew && !hasCons) {
+            reasons.push(`Skaitītājs ${idx+1}: ievadi jauno rādījumu vai patēriņu.`);
+            return;
+          }
+
+          if (hasNew) {
+            if (!CFG.readingRegex.test(newNorm)) {
+              reasons.push(`Skaitītājs ${idx+1}: jaunajam rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
+              return;
+            }
+            // if new reading is provided, consumption can be auto-calculated (even negative) and must not block submit
+          } else if (hasCons) {
+            if (prev == null) {
+              reasons.push(`Skaitītājs ${idx+1}: nevar ievadīt patēriņu, ja nav zināms pēdējais rādījums.`);
+              return;
+            }
+            if (!CFG.readingRegex.test(consNorm)) {
+              reasons.push(`Skaitītājs ${idx+1}: patēriņam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
+              return;
+            }
+          }
+
+          if (!ln.reading) {
+            reasons.push(`Skaitītājs ${idx+1}: ievade nav korekta.`);
+          }
         });
       }
 
@@ -998,7 +1085,7 @@
         mode: "lookup",
         abonenta_numurs: abon,
         contract_nr: contract,
-        lines: buildLinesLookup(),
+        lines: buildLinesLookup().map(x => ({ meter_no: x.meter_no, contract_nr: x.contract_nr, reading: x.reading })),
         website: "",
         client_submission_id: cid
       };

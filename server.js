@@ -43,6 +43,12 @@ if (!DATABASE_URL) {
 /* ===================== DB ===================== */
 const pool = new Pool({ connectionString: DATABASE_URL });
 
+/* ===================== schema ensure (light migrations) ===================== */
+async function ensureSchema() {
+  // allow multi-contract lookup submissions: store contract per line
+  await pool.query(`ALTER TABLE submission_lines ADD COLUMN IF NOT EXISTS contract_nr text;`);
+}
+
 /* ===================== middleware ===================== */
 app.set('trust proxy', 1);
 
@@ -427,22 +433,38 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
     const batchId = await getLatestBillingBatchId(client);
     if (!batchId) return res.json({ ok:true, found:false });
 
-    const q = await client.query(`
-      SELECT address_raw, meter_serial, last_reading, client_name
+    // ✅ Return "all contracts" only if subscriber+contract exists
+    const okMatch = await client.query(`
+      SELECT 1
       FROM billing_meters_snapshot
       WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr=$3
-      ORDER BY address_raw, meter_serial
+      LIMIT 1
     `, [batchId, subscriber, contract]);
+
+    if (!okMatch.rowCount) return res.json({ ok:true, found:false });
+
+    const q = await client.query(`
+      SELECT contract_nr, address_raw, meter_serial, last_reading, client_name
+      FROM billing_meters_snapshot
+      WHERE batch_id=$1 AND subscriber_code=$2
+      ORDER BY contract_nr, address_raw, meter_serial
+    `, [batchId, subscriber]);
 
     if (!q.rowCount) return res.json({ ok:true, found:false });
 
     const byAddr = new Map();
+    const contracts = new Set();
+
     for (const r of q.rows) {
       const addr = r.address_raw || '';
+      const c = r.contract_nr || '';
+      if (c) contracts.add(c);
+
       if (!byAddr.has(addr)) byAddr.set(addr, []);
       byAddr.get(addr).push({
         meter_serial: r.meter_serial,
-        last_reading: r.last_reading
+        last_reading: r.last_reading,
+        contract_nr: r.contract_nr || null
       });
     }
 
@@ -451,6 +473,7 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
       found: true,
       batch_id: batchId,
       client_name: q.rows[0].client_name || null,
+      contracts: Array.from(contracts),
       addresses: Array.from(byAddr.entries()).map(([address, meters]) => ({ address, meters }))
     });
   } catch (e) {
@@ -509,8 +532,8 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
     await db.query('BEGIN');
 
     if (mode === 'lookup') {
-      const contract_nr = pickContractNr(req.body);
-      if (!contract_nr) {
+      const auth_contract_nr = pickContractNr(req.body);
+      if (!auth_contract_nr) {
         await db.query('ROLLBACK');
         return res.status(400).json({ ok:false, error:'Invalid contract_nr' });
       }
@@ -522,12 +545,20 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
           await db.query('ROLLBACK');
           return res.status(400).json({ ok:false, error:'Invalid meter_no (digits only)' });
         }
+
+        const lnContract = String(l.contract_nr ?? l.contractNr ?? l.contract ?? auth_contract_nr).trim();
+        if (!lnContract || lnContract.length > 80) {
+          await db.query('ROLLBACK');
+          return res.status(400).json({ ok:false, error:'Invalid contract_nr in lines' });
+        }
+
         const readingStr = parseReading(l.reading ?? l.radijums);
         if (readingStr == null) {
           await db.query('ROLLBACK');
           return res.status(400).json({ ok:false, error:'Invalid reading (max 2 decimals, >=0)' });
         }
-        cleanLines.push({ meter_no, reading: readingStr });
+
+        cleanLines.push({ meter_no, reading: readingStr, contract_nr: lnContract });
       }
 
       const batchId = await getLatestBillingBatchId(db);
@@ -536,24 +567,50 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
         return res.status(503).json({ ok:false, error:'Billing data not uploaded (admin must upload XLSX)' });
       }
 
-      const snap = await db.query(`
-        SELECT
-          meter_serial, address_raw, last_reading, last_reading_date, next_verif_date,
-          period_from, period_to, meter_type, stage, notes, qty_type, client_name
+      // ✅ authorize: subscriber+entered contract must exist
+      const auth = await db.query(`
+        SELECT 1
         FROM billing_meters_snapshot
         WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr=$3
-      `, [batchId, subscriber_code, contract_nr]);
+        LIMIT 1
+      `, [batchId, subscriber_code, auth_contract_nr]);
+
+      if (!auth.rowCount) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({ ok:false, error:'Subscriber/contract not found' });
+      }
+
+      const contractsWanted = Array.from(new Set(cleanLines.map(x => x.contract_nr)));
+      const snap = await db.query(`
+        SELECT
+          contract_nr,
+          meter_serial,
+          address_raw,
+          last_reading,
+          last_reading_date,
+          next_verif_date,
+          period_from,
+          period_to,
+          meter_type,
+          stage,
+          notes,
+          qty_type,
+          client_name
+        FROM billing_meters_snapshot
+        WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr = ANY($3::text[])
+      `, [batchId, subscriber_code, contractsWanted]);
 
       if (!snap.rowCount) {
         await db.query('ROLLBACK');
         return res.status(400).json({ ok:false, error:'Subscriber/contract not found' });
       }
 
-      const snapByMeter = new Map();
-      for (const r of snap.rows) snapByMeter.set(String(r.meter_serial), r);
+      const snapByKey = new Map(); // key = contract|meter
+      for (const r of snap.rows) snapByKey.set(String(r.contract_nr) + '|' + String(r.meter_serial), r);
 
       for (const x of cleanLines) {
-        if (!snapByMeter.has(x.meter_no)) {
+        const key = String(x.contract_nr) + '|' + String(x.meter_no);
+        if (!snapByKey.has(key)) {
           await db.query('ROLLBACK');
           return res.status(400).json({ ok:false, error:'Meter mismatch' });
         }
@@ -580,7 +637,7 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
       const subRes = await db.query(insertSubmissionSql, [
         client_submission_id,
         subscriber_code,
-        contract_nr,
+        auth_contract_nr, // entered contract (authorization / audit)
         batchId,
         firstSnap.client_name || null,
         'MULTI',
@@ -597,6 +654,7 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
       const insertLineSql = `
         INSERT INTO submission_lines (
           submission_id,
+          contract_nr,
           meter_no,
           address,
           meter_type,
@@ -612,20 +670,21 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
           qty_type
         )
         VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,
-          $9::numeric, $10::numeric, $11::numeric,
-          $12,$13,$14
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,
+          $10::numeric, $11::numeric, $12::numeric,
+          $13,$14,$15
         )
       `;
 
       for (const x of cleanLines) {
-        const s = snapByMeter.get(x.meter_no);
+        const s = snapByKey.get(String(x.contract_nr) + '|' + String(x.meter_no));
         const prev = s.last_reading == null ? null : Number(s.last_reading);
         const cur = Number(String(x.reading));
         const cons = (prev == null) ? null : (cur - prev);
 
         await db.query(insertLineSql, [
           submissionId,
+          x.contract_nr,
           x.meter_no,
           s.address_raw || null,
           s.meter_type || null,
@@ -698,12 +757,12 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
     await db.query('DELETE FROM submission_lines WHERE submission_id = $1', [submissionId]);
 
     const insertLineSql = `
-      INSERT INTO submission_lines (submission_id, meter_no, address, previous_reading, reading, consumption)
-      VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6::numeric)
+      INSERT INTO submission_lines (submission_id, contract_nr, meter_no, address, previous_reading, reading, consumption)
+      VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::numeric)
     `;
 
     for (const l of cleanLines) {
-      await db.query(insertLineSql, [submissionId, l.meter_no, l.address, null, l.reading, null]);
+      await db.query(insertLineSql, [submissionId, null, l.meter_no, l.address, null, l.reading, null]);
     }
 
     await db.query('COMMIT');
@@ -987,7 +1046,7 @@ async function exportCsv(res, req) {
         s.id AS submission_id,
         s.client_submission_id,
         s.subscriber_code,
-        s.contract_nr,
+        COALESCE(l.contract_nr, s.contract_nr) AS contract_nr,
         s.address,
         (s.submitted_at AT TIME ZONE 'UTC') AS submitted_at_utc,
         l.meter_no,
@@ -1085,7 +1144,7 @@ app.get('/admin/export.xlsx', requireBasicAuth, async (req, res) => {
   try {
     let sql = `
       SELECT
-        s.contract_nr,
+        COALESCE(l.contract_nr, s.contract_nr) AS contract_nr,
         s.client_name,
         s.subscriber_code,
         l.address,
@@ -1198,6 +1257,14 @@ app.get('/admin/export.xlsx', requireBasicAuth, async (req, res) => {
 });
 
 /* ===================== start ===================== */
-app.listen(PORT, () => {
-  console.log(`server listening on :${PORT} (enforceWindow=${ENFORCE_WINDOW}, tz=${TZ})`);
-});
+(async () => {
+  try {
+    await ensureSchema();
+    app.listen(PORT, () => {
+      console.log(`server listening on :${PORT} (enforceWindow=${ENFORCE_WINDOW}, tz=${TZ})`);
+    });
+  } catch (e) {
+    console.error('FATAL: failed to start', e);
+    process.exit(1);
+  }
+})();
