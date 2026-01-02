@@ -1,6 +1,6 @@
-(
-echo node_modules
-echo .env
-echo *.log
-echo .DS_Store
-) > .gitignore
+@"
+node_modules/
+data/~$*.xlsx
+*.log
+.DS_Store
+"@ | Out-File -Encoding utf8 .gitignore
