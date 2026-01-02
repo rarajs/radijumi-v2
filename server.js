@@ -47,19 +47,20 @@ async function ensureSchema() {
   // multi-contract submissions: store contract per line
   await pool.query(`ALTER TABLE submission_lines ADD COLUMN IF NOT EXISTS contract_nr text;`);
 
-  // history table: monthly m3 per (contract + address + month)
+  // history per meter: monthly m3 per (contract + meter + month)
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS history_monthly_address (
+    CREATE TABLE IF NOT EXISTS history_monthly_meter (
       id bigserial PRIMARY KEY,
       contract_nr text NOT NULL,
-      address_raw text NOT NULL,
+      meter_no text NOT NULL,
       month text NOT NULL, -- YYYY-MM
       m3 numeric(14,2) NOT NULL DEFAULT 0,
       updated_at timestamptz NOT NULL DEFAULT now(),
-      UNIQUE(contract_nr, address_raw, month)
+      UNIQUE(contract_nr, meter_no, month)
     );
   `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS history_monthly_address_month_idx ON history_monthly_address(month);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS history_monthly_meter_month_idx ON history_monthly_meter(month);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS history_monthly_meter_contract_meter_idx ON history_monthly_meter(contract_nr, meter_no);`);
 }
 
 /* ===================== middleware ===================== */
@@ -492,60 +493,57 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
   }
 });
 
-/* HISTORY API (pēdējie 12 mēneši, m3, trūkst/negatīvs=0) */
+/* HISTORY API (pēdējie 12 mēneši, m3, trūkst/negatīvs=0) — per METER */
 app.get('/api/history', lookupLimiter, async (req, res) => {
   const originError = enforceSameOriginSoft(req, res);
   if (originError) return;
 
   const subscriber = String(req.query.subscriber || '').trim().replace(/\D+/g, '');
   const contract = String(req.query.contract || '').trim();
-  const address = String(req.query.address || '').trim();
+  const meter = String(req.query.meter || '').trim();
 
   if (!/^\d{8}$/.test(subscriber)) return res.status(400).json({ ok:false, error:'Invalid subscriber' });
   if (!contract) return res.status(400).json({ ok:false, error:'Invalid contract' });
-  if (!address) return res.status(400).json({ ok:false, error:'Invalid address' });
+  if (!meter) return res.status(400).json({ ok:false, error:'Invalid meter' });
 
   const client = await pool.connect();
   try {
     const batchId = await getLatestBillingBatchId(client);
     if (!batchId) return res.status(503).json({ ok:false, error:'Billing data not uploaded' });
 
-    // autorizācija: subscriber+contract+address eksistē snapshotā
+    // authorization: subscriber+contract+meter exists in latest snapshot
     const auth = await client.query(`
       SELECT 1
       FROM billing_meters_snapshot
-      WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr=$3 AND address_raw=$4
+      WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr=$3 AND meter_serial=$4
       LIMIT 1
-    `, [batchId, subscriber, contract, address]);
+    `, [batchId, subscriber, contract, meter]);
 
     if (!auth.rowCount) return res.status(403).json({ ok:false, error:'Not allowed' });
 
-    // atrodam pēdējo mēnesi, tad ģenerējam 12 mēnešus atpakaļ
     const last = await client.query(`
       SELECT month
-      FROM history_monthly_address
-      WHERE contract_nr=$1 AND address_raw=$2
+      FROM history_monthly_meter
+      WHERE contract_nr=$1 AND meter_no=$2
       ORDER BY month DESC
       LIMIT 1
-    `, [contract, address]);
+    `, [contract, meter]);
 
     if (!last.rowCount) {
-      return res.json({ ok:true, contract, address, items: [] });
+      return res.json({ ok:true, contract, meter, items: [] });
     }
 
     const lastMonth = last.rows[0].month; // YYYY-MM
     const dt0 = DateTime.fromFormat(lastMonth + '-01', 'yyyy-MM-dd', { zone: TZ }).startOf('month');
 
     const months = [];
-    for (let i=11; i>=0; i--) {
-      months.push(dt0.minus({ months: i }).toFormat('yyyy-MM'));
-    }
+    for (let i=11; i>=0; i--) months.push(dt0.minus({ months: i }).toFormat('yyyy-MM'));
 
     const q = await client.query(`
       SELECT month, m3
-      FROM history_monthly_address
-      WHERE contract_nr=$1 AND address_raw=$2 AND month = ANY($3::text[])
-    `, [contract, address, months]);
+      FROM history_monthly_meter
+      WHERE contract_nr=$1 AND meter_no=$2 AND month = ANY($3::text[])
+    `, [contract, meter, months]);
 
     const map = new Map();
     for (const r of q.rows) {
@@ -554,7 +552,7 @@ app.get('/api/history', lookupLimiter, async (req, res) => {
     }
 
     const items = months.map(m => ({ month: m, m3: map.get(m) ?? 0 }));
-    return res.json({ ok:true, contract, address, items });
+    return res.json({ ok:true, contract, meter, items });
   } catch (e) {
     console.error('history api error', e);
     res.status(500).json({ ok:false, error:'Internal error' });
@@ -725,7 +723,7 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
 
       await db.query('COMMIT');
 
-      // LIVE: katrai adresei izšaujam punktu (zaļš) uz dashboard
+      // LIVE: per address -> point
       try {
         const p = await pool.query(`
           SELECT l.address, coalesce(sum(l.consumption),0)::numeric(14,2) AS consumption_sum
@@ -793,7 +791,7 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
 
     await db.query('COMMIT');
 
-    // LIVE: manual arī dod punktu, ja var atrast koordinātas
+    // LIVE: manual also emits points if geo found
     try {
       const p = await pool.query(`
         SELECT DISTINCT l.address
@@ -849,7 +847,6 @@ function pageShell(title, bodyHtml) {
   .muted{color:#666;font-size:12px;margin-top:10px}
   label{display:block;margin:10px 0 6px;font-weight:900}
   input,select{width:100%;padding:10px 12px;border-radius:12px;border:1px solid #d8dde3;font:inherit}
-  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .danger{border:1px solid #f0c9cf;background:#fff5f7;border-radius:14px;padding:12px;margin-top:14px}
   .danger h3{margin:0 0 6px;color:#7a0016}
   .ok{background:#1f5f86;color:#fff;border-color:#1f5f86}
@@ -906,7 +903,7 @@ app.get('/admin/billing', requireBasicAuth, async (req, res) => {
 app.get('/admin/history', requireBasicAuth, async (req, res) => {
   const html = pageShell('History upload', `
     <h1>Ielādēt 12 mēnešu pārskatu (vēsturiskais patēriņš)</h1>
-    <div class="muted">Uploads ir no billing sistēmas (tavs 16MB XLSX). Importē: contract + adrese + Periods līdz + Daudzums iev.</div>
+    <div class="muted">Imports: <b>līgums + skaitītājs + Periods līdz + Daudzums iev.</b> (negatīvs/trūkst → 0). Saglabā pa skaitītāju.</div>
 
     <form method="POST" action="/admin/history/upload" enctype="multipart/form-data" style="margin-top:12px">
       <label>XLSX fails (12 mēnešu pārskats)</label>
@@ -1192,10 +1189,9 @@ app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async
   }
 });
 
-/* ===================== Admin: history XLSX upload ===================== */
+/* ===================== Admin: history XLSX upload (per meter) ===================== */
 function findHeaderRow(rows, wantedNames) {
-  // meklē 0..60 rindas, kur ir vismaz 3 no 4
-  for (let i=0; i<Math.min(rows.length, 60); i++) {
+  for (let i=0; i<Math.min(rows.length, 80); i++) {
     const r = rows[i];
     if (!Array.isArray(r)) continue;
     const cells = r.map(x => String(x ?? '').trim().replace(/\r/g, '')).filter(Boolean);
@@ -1210,50 +1206,45 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
   if (!req.file) return res.status(400).send('No file');
 
   const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-  const ws = wb.Sheets[wb.SheetNames[0]];
+  const ws = wb.Sheets[wb.SheetNames[0]]; // Sheet1
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
 
-  // kandidāti (tavam failam jātrāpa vismaz 3/4)
-  const WANT = ['NĪPLigPap.NĪPLīg.Numurs', 'NĪPLigPap.NĪO.Adrese', 'Periods līdz', 'Daudzums iev.'];
+  const WANT = ['NĪPLigPap.NĪPLīg.Numurs', 'SkaE.Numurs', 'Periods līdz', 'Daudzums iev.'];
   const headerRowIndex = findHeaderRow(rows, WANT);
+  if (headerRowIndex === -1) return res.status(400).send('History header not found (need contract/meter/period/consumption columns).');
 
-  if (headerRowIndex === -1) {
-    return res.status(400).send('History header not found (need contract/address/period/consumption columns).');
-  }
-
-  const header = rows[headerRowIndex].map(x => String(x ?? '').trim());
+  const header = rows[headerRowIndex].map(x => String(x ?? '').trim().replace(/\r/g, ''));
   const col = (name) => header.indexOf(name);
 
-  // stingri: tieši šie nosaukumi
   const iContract = col('NĪPLigPap.NĪPLīg.Numurs');
-  const iAddr = col('NĪPLigPap.NĪO.Adrese') >= 0 ? col('NĪPLigPap.NĪO.Adrese') : col('NĪO adrese');
+  const iMeter = col('SkaE.Numurs');
   const iPeriodTo = col('Periods līdz');
   const iQty = col('Daudzums iev.');
 
-  if (iContract < 0 || iAddr < 0 || iPeriodTo < 0 || iQty < 0) {
+  if (iContract < 0 || iMeter < 0 || iPeriodTo < 0 || iQty < 0) {
     return res.status(400).send('Missing required history columns.');
   }
 
   const dataRows = rows.slice(headerRowIndex + 1);
 
-  // agregējam: key=(contract|address|month) -> m3
+  // aggregate: contract|meter|month -> m3
   const agg = new Map();
 
   for (const r of dataRows) {
     if (!Array.isArray(r) || !r.length) continue;
 
     const contract = String(r[iContract] ?? '').trim();
-    const address = String(r[iAddr] ?? '').trim();
+    const meterNo = String(r[iMeter] ?? '').trim();
     const periodToIso = excelDateToISO(r[iPeriodTo]);
     const month = isoToMonth(periodToIso);
 
-    if (!contract || !address || !month) continue;
+    if (!contract || !meterNo || !month) continue;
 
     const qtyRaw = r[iQty];
     let m3 = (qtyRaw == null || qtyRaw === '') ? 0 : Number(qtyRaw);
     if (!Number.isFinite(m3) || m3 < 0) m3 = 0;
 
-    const key = contract + '|' + address + '|' + month;
+    const key = contract + '|' + meterNo + '|' + month;
     agg.set(key, (agg.get(key) || 0) + m3);
   }
 
@@ -1262,17 +1253,17 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
     await client.query('BEGIN');
 
     const up = `
-      INSERT INTO history_monthly_address (contract_nr, address_raw, month, m3, updated_at)
+      INSERT INTO history_monthly_meter (contract_nr, meter_no, month, m3, updated_at)
       VALUES ($1,$2,$3,$4::numeric, now())
-      ON CONFLICT (contract_nr, address_raw, month)
+      ON CONFLICT (contract_nr, meter_no, month)
       DO UPDATE SET m3 = EXCLUDED.m3, updated_at = now()
     `;
 
     let count = 0;
     for (const [key, sum] of agg.entries()) {
-      const [contract, address, month] = key.split('|');
+      const [contract, meterNo, month] = key.split('|');
       const v = Number.isFinite(sum) && sum > 0 ? sum : 0;
-      await client.query(up, [contract, address, month, v.toFixed(2)]);
+      await client.query(up, [contract, meterNo, month, v.toFixed(2)]);
       count++;
     }
 

@@ -128,7 +128,8 @@
     .address-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:8px; }
     .auto-address-title{ font-size:13px; font-weight:1000; color:#111; padding-top:2px; }
 
-    .addrActions{ display:flex; align-items:center; gap:10px; }
+    .meters{ margin-top:10px; display:flex; flex-direction:column; gap:10px; }
+
     .histBtn{
       border-radius:12px; border:2px solid #cfd6de; background:#fff;
       padding:8px 10px; cursor:pointer; font-weight:1000; color:#111;
@@ -136,8 +137,6 @@
     }
     .histBtn:hover{ background:#eef3f8; }
     .histBtn span{ font-size:16px; }
-
-    .meters{ margin-top:10px; display:flex; flex-direction:column; gap:10px; }
 
     /* manual meter row */
     .meter-row{
@@ -168,8 +167,6 @@
       .del-btn span{ display:none; }
       .del-btn::before{ content:"Dzēst skaitītāju"; }
       .address-head{ flex-direction:column; align-items:stretch; gap:8px; }
-      .addrActions{ justify-content:flex-end; }
-      .histBtn{ width:100%; justify-content:center; }
     }
 
     /* autocomplete */
@@ -197,7 +194,7 @@
     #autoSection{ display:none; margin-top:10px; }
     .auto-meter-row{
       display:grid;
-      grid-template-columns: 1fr 1fr 1fr 140px;
+      grid-template-columns: 1fr 1fr 1fr 180px;
       gap:10px;
       align-items:end;
       margin-top:10px;
@@ -205,7 +202,7 @@
     .auto-meter-row.neg input[data-role="cons"]{ color:var(--danger); font-weight:1000; }
     @media (max-width:640px){ .auto-meter-row{ grid-template-columns: 1fr; } }
 
-    /* submit modal */
+    /* modals */
     #submitModal, #notFoundModal, #helpModal, #historyModal { position: fixed; inset: 0; z-index: 9999; display:none; }
     .modalBackdrop { position: absolute; inset: 0; background: rgba(0,0,0,.35); }
     .modalCard{
@@ -456,7 +453,7 @@
   $('#helpLink1').addEventListener('click', openHelp);
   $('#helpLink2').addEventListener('click', openHelp);
 
-  // history modal (click anywhere outside card closes)
+  // history modal (click outside closes)
   $('#histBackdrop').addEventListener('click', () => hideModal('#historyModal'));
   $('#histCloseBtn').addEventListener('click', () => hideModal('#historyModal'));
   $('#histCard').addEventListener('click', (e) => e.stopPropagation());
@@ -543,7 +540,6 @@
     const labels = items.map(x => String(x.month || '').slice(5,7)); // MM
     const maxV = Math.max(1, ...values);
 
-    // axis
     ctx.strokeStyle = '#ddd';
     ctx.beginPath();
     ctx.moveTo(padL, padT);
@@ -554,7 +550,6 @@
     const n = values.length || 1;
     const bw = iw / n;
 
-    // bars
     ctx.fillStyle = '#1f5f86';
     for (let i=0;i<n;i++){
       const v = values[i];
@@ -563,7 +558,6 @@
       const y = padT + ih - bh;
       ctx.fillRect(x, y, Math.max(2, bw-6), bh);
 
-      // value label
       ctx.fillStyle = '#111';
       ctx.font = '12px system-ui';
       const t = (Math.round(v*100)/100).toFixed(2).replace(/\.00$/,'');
@@ -571,13 +565,11 @@
       ctx.fillStyle = '#1f5f86';
     }
 
-    // Y labels
     ctx.fillStyle = '#555';
     ctx.font = '12px system-ui';
     ctx.fillText('0', 12, padT+ih);
     ctx.fillText(String(maxV), 12, padT+12);
 
-    // X labels (months)
     ctx.fillStyle = '#555';
     ctx.font = '12px system-ui';
     for (let i=0;i<n;i++){
@@ -586,17 +578,17 @@
     }
   }
 
-  async function openHistory(address, contract) {
+  async function openHistory(address, contract, meter) {
     const subscriber = readAbonentaKods();
-    if (!CFG.abonRegex.test(subscriber) || !contract || !address) return;
+    if (!CFG.abonRegex.test(subscriber) || !contract || !meter) return;
 
-    $('#histTitle').textContent = `Patēriņš pa mēnešiem (m³) — ${address}`;
+    $('#histTitle').textContent = `Patēriņš pa mēnešiem (m³) — Skaitītājs ${meter}`;
     $('#histLoading').textContent = 'Ielādēju…';
-    $('#histMeta').textContent = '';
+    $('#histMeta').textContent = address ? address : '';
     showModal('#historyModal');
 
     try {
-      const res = await fetch(`/api/history?subscriber=${encodeURIComponent(subscriber)}&contract=${encodeURIComponent(contract)}&address=${encodeURIComponent(address)}`);
+      const res = await fetch(`/api/history?subscriber=${encodeURIComponent(subscriber)}&contract=${encodeURIComponent(contract)}&meter=${encodeURIComponent(meter)}`);
       const j = await res.json().catch(()=>null);
       if (!res.ok || !j || j.ok !== true) {
         $('#histLoading').textContent = 'Neizdevās ielādēt vēsturi.';
@@ -604,7 +596,6 @@
       }
 
       const items = Array.isArray(j.items) ? j.items : [];
-      // noteikums: trūkst/negatīvs => 0
       const fixed = items.map(x => ({
         month: x.month,
         m3: (Number(x.m3) > 0 && Number.isFinite(Number(x.m3))) ? Number(x.m3) : 0
@@ -612,7 +603,7 @@
 
       if (!fixed.length) {
         $('#histLoading').textContent = 'Vēsturiskie dati nav atrasti.';
-        drawHistoryChart($('#histCanvas'), Array.from({length:12}, (_,i)=>({month:'', m3:0})));
+        drawHistoryChart($('#histCanvas'), Array.from({length:12}, ()=>({month:'', m3:0})));
         return;
       }
 
@@ -620,7 +611,7 @@
       drawHistoryChart($('#histCanvas'), fixed);
 
       const total = fixed.reduce((a,b)=>a+(Number(b.m3)||0),0);
-      $('#histMeta').textContent = `Pēdējie 12 mēneši • Kopā: ${total.toFixed(2).replace(/\.00$/,'')} m³`;
+      $('#histMeta').textContent = `${address || ''} • Pēdējie 12 mēneši • Kopā: ${total.toFixed(2).replace(/\.00$/,'')} m³`;
     } catch {
       $('#histLoading').textContent = 'Neizdevās ielādēt vēsturi.';
     }
@@ -667,20 +658,11 @@
     addresses.forEach((a) => {
       const addrText = String(a.address || "").trim();
       const meters = Array.isArray(a.meters) ? a.meters : [];
-      const contractForAddress = (meters[0] && meters[0].contract_nr) ? String(meters[0].contract_nr) : "";
 
       const block = el("div", { class:"address-block" });
 
       const head = el("div", { class:"address-head" }, [
-        el("div", { class:"auto-address-title", text: addrText }),
-        el("div", { class:"addrActions" }, [
-          el("button", {
-            type:"button",
-            class:"histBtn",
-            onclick: () => openHistory(addrText, contractForAddress),
-            title:"Apskatīt patēriņu pa mēnešiem"
-          }, [el("span",{text:"📊"}), el("div",{text:"Vēsture"})])
-        ])
+        el("div", { class:"auto-address-title", text: addrText })
       ]);
 
       const metersHost = el("div", { class:"meters" });
@@ -710,9 +692,18 @@
         ]);
 
         const consInp = el("input", { type:"text", inputmode:"decimal", placeholder:"Ievadi patēriņu", "data-role":"cons" });
+
+        const histBtn = el("button", {
+          type:"button",
+          class:"histBtn",
+          onclick: () => openHistory(addrText, cNr, meter),
+          title:"Apskatīt patēriņu pa mēnešiem"
+        }, [el("span",{text:"📊"}), el("div",{text:"Vēsture"})]);
+
         const f4 = el("div", { class:"field" }, [
           el("label", { text:"Patēriņš" }),
-          consInp
+          consInp,
+          el("div", { style:"margin-top:8px; display:flex; justify-content:flex-end;" }, [histBtn])
         ]);
 
         newInp.addEventListener("input", () => {
@@ -850,16 +841,6 @@
     });
   }
 
-  function renumberAddresses() {
-    const blocks = $$(".address-block", $("#addresses"));
-    blocks.forEach((block, i) => {
-      const badge = $(".badge", block);
-      if (!badge) return;
-      badge.textContent = `Adrese ${i+1}`;
-      badge.style.display = i===0 ? "none" : "inline-flex";
-    });
-  }
-
   function updateMeterDeleteButtons(addressBlock) {
     const rows = $$(".meter-row", addressBlock);
     rows.forEach((r, idx) => {
@@ -901,24 +882,6 @@
   function createAddressBlock() {
     const block = el("div", { class:"address-block" });
 
-    const badge = el("div", { class:"badge", text:"Adrese 1" });
-    badge.style.display = "none";
-
-    const removeAddressBtn = el("button", {
-      type:"button",
-      class:"btn-secondary",
-      text:"Dzēst adresi",
-      onclick: () => {
-        const all = $$(".address-block", $("#addresses"));
-        if (all.length <= 1) return;
-        block.remove();
-        renumberAddresses();
-        refreshAll();
-      }
-    });
-
-    const head = el("div", { class:"address-head" }, [badge, removeAddressBtn]);
-
     const addressInput = el("input", { type:"text", "data-role":"addressText", autocomplete:"off" });
     const addressField = el("div", { class:"field" }, [ el("label", {text:"Adrese"}), addressInput ]);
 
@@ -936,7 +899,7 @@
       }
     });
 
-    block.append(head, addressField, metersHost, addMeterBtn);
+    block.append(addressField, metersHost, addMeterBtn);
     attachAddressAutocomplete(addressInput);
     updateMeterDeleteButtons(block);
     return block;
@@ -946,7 +909,6 @@
     const host = $("#addresses");
     host.innerHTML = "";
     host.appendChild(createAddressBlock());
-    renumberAddresses();
   }
 
   function buildLinesManual() {
@@ -1238,7 +1200,6 @@
 
     $("#addAddressBtn").addEventListener("click", () => {
       $("#addresses").appendChild(createAddressBlock());
-      renumberAddresses();
       refreshAll();
     });
 
