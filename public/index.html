@@ -202,7 +202,7 @@
       .auto-meter-row{ grid-template-columns: 1fr; }
     }
 
-    /* kvadrātaina “vēsture” ikona */
+    /* vēstures ikona aizpilda visu kvadrātu */
     .histIconBtn{
       width:44px;
       height:44px;
@@ -216,7 +216,13 @@
       padding:0;
     }
     .histIconBtn:hover{ background:#eef3f8; }
-    .histIconBtn img{ width:22px; height:22px; display:block; }
+    .histIconBtn img{
+      width:100%;
+      height:100%;
+      padding:6px;           /* lielāka ikona, bez “sīka” efekta */
+      object-fit:contain;
+      display:block;
+    }
 
     .historyCell{
       display:flex;
@@ -305,7 +311,8 @@
       </div>
     </div>
 
-    <button class="btn-primary disabled" id="submitBtn" type="button" aria-disabled="true">IESNIEGT</button>
+    <!-- SĀKUMĀ SLĒPTS: parādās tikai pēc lookup/manual -->
+    <button class="btn-primary disabled" id="submitBtn" type="button" aria-disabled="true" style="display:none;">IESNIEGT</button>
     <div id="submitInfo" class="infoBox"></div>
   </div>
 </div>
@@ -391,12 +398,6 @@
     return n;
   }
 
-  function escapeHtml(s) {
-    return (s || "").replace(/[&<>"']/g, (c) => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-    }[c]));
-  }
-
   function setLookupNotice(type, html){
     const box = $("#lookupNotice");
     box.classList.remove("show","loading","good","bad");
@@ -430,6 +431,15 @@
   let LOOKUP_LOADING = false;
   let LOOKUP_FOUND = false;
   let LOOKUP_ATTEMPTED = false;
+
+  function setSubmitVisible(isVisible){
+    const btn = $("#submitBtn");
+    btn.style.display = isVisible ? "block" : "none";
+    if (!isVisible) {
+      $("#submitInfo").classList.remove("show");
+      $("#submitInfo").innerHTML = "";
+    }
+  }
 
   // ===== modal helpers =====
   function showModal(id){ $(id).style.display='block'; }
@@ -479,7 +489,7 @@
   $('#helpLink1').addEventListener('click', openHelp);
   $('#helpLink2').addEventListener('click', openHelp);
 
-  // history modal (click outside closes)
+  // history modal
   $('#histBackdrop').addEventListener('click', () => hideModal('#historyModal'));
   $('#histCloseBtn').addEventListener('click', () => hideModal('#historyModal'));
   $('#histCard').addEventListener('click', (e) => e.stopPropagation());
@@ -551,6 +561,7 @@
   function clearAuto(){
     $("#autoAddresses").innerHTML = "";
     $("#autoSection").style.display = "none";
+    if (MODE === "lookup") setSubmitVisible(false);
   }
 
   function drawHistoryChart(canvas, items) {
@@ -758,6 +769,7 @@
     });
 
     $("#autoSection").style.display = "block";
+    setSubmitVisible(true);   /* <-- parādām tikai tagad */
   }
 
   async function runLookup(){
@@ -769,6 +781,7 @@
 
     LOOKUP_FOUND = false;
     clearAuto();
+    setSubmitVisible(false);
 
     $("#errAbonents").classList.toggle("show", !!abon && !CFG.abonRegex.test(abon));
     $("#errContract").classList.toggle("show", !!contract === false);
@@ -791,6 +804,7 @@
         setLookupNotice("bad", "<b>Neizdevās veikt meklēšanu.</b> Pamēģini vēlreiz.");
         LOOKUP_FOUND = false;
         clearAuto();
+        setSubmitVisible(false);
         refreshAll();
         return;
       }
@@ -799,6 +813,7 @@
         setLookupNotice("bad", "<b>Klients netika atrasts.</b>");
         LOOKUP_FOUND = false;
         clearAuto();
+        setSubmitVisible(false);
         showModal('#notFoundModal');
         refreshAll();
         return;
@@ -814,6 +829,7 @@
       setLookupNotice("bad", "<b>Neizdevās veikt meklēšanu.</b> Pamēģini vēlreiz.");
       LOOKUP_FOUND = false;
       clearAuto();
+      setSubmitVisible(false);
       refreshAll();
     } finally {
       LOOKUP_LOADING = false;
@@ -1099,7 +1115,7 @@
 
     box.innerHTML =
       "<b>Kāpēc poga IESNIEGT ir neaktīva:</b><ul style='margin:8px 0 0 18px; padding:0;'>" +
-      reasons.map(r => `<li>${escapeHtml(r)}</li>`).join("") +
+      reasons.map(r => `<li>${r}</li>`).join("") +
       "</ul>";
     box.classList.add("show");
   }
@@ -1112,6 +1128,7 @@
     clearAuto();
     $("#manualSection").style.display = "block";
     initAddresses();
+    setSubmitVisible(true);   /* <-- parādām manual režīmā */
     refreshAll();
     $("#manualSection").scrollIntoView({ behavior:"smooth", block:"start" });
   }
@@ -1201,6 +1218,7 @@
 
     $("#manualSection").style.display = "none";
     $("#addresses").innerHTML = "";
+    setSubmitVisible(false);
     refreshAll();
   }
 
@@ -1208,6 +1226,7 @@
     initCodeBoxes();
     refreshWindowNotice();
     setLookupNotice(null, "");
+    setSubmitVisible(false);  /* <-- sākumā slēpts */
 
     $("#contractNr").addEventListener("input", () => {
       if (MODE === "lookup") {
@@ -1216,6 +1235,7 @@
         LOOKUP_LOADING = false;
         setLookupNotice(null, "");
         clearAuto();
+        setSubmitVisible(false);
       }
       refreshAll();
     });
