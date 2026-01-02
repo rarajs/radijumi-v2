@@ -1,6 +1,9 @@
-@"
-node_modules/
-data/~$*.xlsx
+﻿node_modules/
+.env
 *.log
 .DS_Store
-"@ | Out-File -Encoding utf8 .gitignore
+
+data/~$*.xlsx
+data/~$*.xlsm
+data/~$*.xls
+data/~$*.csv

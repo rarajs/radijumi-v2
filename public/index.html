@@ -219,8 +219,9 @@
     .histIconBtn img{
       width:100%;
       height:100%;
-      padding:6px;           /* lielāka ikona, bez “sīka” efekta */
-      object-fit:contain;
+      padding:0;           /* lielāka ikona, bez “sīka” efekta */
+      object-fit:cover;
+	  border-radius:10px;
       display:block;
     }
 
@@ -740,7 +741,7 @@
           onclick: () => openHistory(addrText, cNr, meter),
           title:"Patēriņa vēsture"
         }, [
-          el("img", { src:"/assets/history.png", alt:"Vēsture" })
+          el("img", { src:"/assets/history.png?v=2", alt:"Vēsture" })
         ]);
 
         const f5 = el("div", { class:"field historyCell" }, [
