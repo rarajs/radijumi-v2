@@ -1198,7 +1198,7 @@ function findHeaderRow(rows, wantedNames) {
   for (let i=0; i<Math.min(rows.length, 60); i++) {
     const r = rows[i];
     if (!Array.isArray(r)) continue;
-    const cells = r.map(x => String(x ?? '').trim()).filter(Boolean);
+    const cells = r.map(x => String(x ?? '').trim().replace(/\r/g, '')).filter(Boolean);
     let hit = 0;
     for (const w of wantedNames) if (cells.includes(w)) hit++;
     if (hit >= 3) return i;
@@ -1214,7 +1214,7 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
 
   // kandidāti (tavam failam jātrāpa vismaz 3/4)
-  const WANT = ['NĪPLigPap.NĪPLīg.Numurs', 'NĪO adrese', 'Periods līdz', 'Daudzums iev.'];
+  const WANT = ['NĪPLigPap.NĪPLīg.Numurs', 'NĪPLigPap.NĪO.Adrese', 'Periods līdz', 'Daudzums iev.'];
   const headerRowIndex = findHeaderRow(rows, WANT);
 
   if (headerRowIndex === -1) {
@@ -1226,7 +1226,7 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
 
   // stingri: tieši šie nosaukumi
   const iContract = col('NĪPLigPap.NĪPLīg.Numurs');
-  const iAddr = col('NĪO adrese');
+  const iAddr = col('NĪPLigPap.NĪO.Adrese') >= 0 ? col('NĪPLigPap.NĪO.Adrese') : col('NĪO adrese');
   const iPeriodTo = col('Periods līdz');
   const iQty = col('Daudzums iev.');
 
