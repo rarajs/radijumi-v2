@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="lv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dashboard</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    body{ font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; margin:20px; background:#f6f7f9; color:#111; }
+    .wrap{ max-width:1100px; margin:0 auto; }
+    .card{ background:#fff; border:1px solid #d8dde3; border-radius:16px; padding:14px; box-shadow:0 6px 18px rgba(0,0,0,.06); }
+    h1{ margin:0 0 10px; font-size:18px; font-weight:900; }
+    .grid{ display:grid; grid-template-columns: 1fr; gap:12px; }
+    @media (min-width:900px){ .grid{ grid-template-columns: 1.2fr .8fr; } }
+    #map{ height:460px; border-radius:14px; border:1px solid #ddd; }
+    table{ width:100%; border-collapse:collapse; }
+    th, td{ padding:8px 10px; border-bottom:1px solid #eee; font-size:13px; vertical-align:top; }
+    th{ text-align:left; font-weight:900; background:#fafbfc; position:sticky; top:0; }
+    .muted{ color:#666; font-size:12px; }
+    .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    select, button, a{ padding:10px 12px; border-radius:12px; border:1px solid #d8dde3; background:#fff; font-weight:800; text-decoration:none; color:#111; cursor:pointer; }
+    a:hover, button:hover{ background:#eef3f8; }
+    canvas{ width:100%; height:220px; border:1px solid #eee; border-radius:14px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="row" style="justify-content:space-between;">
+      <h1>Dashboard (live)</h1>
+      <div class="row">
+        <a href="/admin">Admin</a>
+        <span class="muted">Mēnesis:</span>
+        <select id="monthSel"></select>
+        <button id="reloadBtn">Pārlādēt</button>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:10px;">
+      <div>
+        <div id="map"></div>
+        <div class="muted" style="margin-top:8px;" id="mapInfo">—</div>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:900; margin-bottom:6px;">Iesniegumi pa stundām</div>
+          <canvas id="hourChart" width="900" height="240"></canvas>
+        </div>
+      </div>
+
+      <div>
+        <div style="font-weight:900; margin-bottom:6px;">Pēdējie 10 iesniegumi</div>
+        <div style="max-height:720px; overflow:auto; border:1px solid #eee; border-radius:14px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Laiks</th>
+                <th>Adrese</th>
+                <th>Patēriņš</th>
+              </tr>
+            </thead>
+            <tbody id="latestTbody"></tbody>
+          </table>
+        </div>
+        <div class="muted" style="margin-top:8px;">Zaļš punkts parādās uzreiz pēc iesniegšanas.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const map = L.map('map').setView([56.968, 23.770], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+  const markers = new Map(); // address -> marker
+
+  function escapeHtml(s){
+    return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function addGreenPoint(p) {
+    const key = p.address;
+    if (!key || markers.has(key)) return;
+
+    const m = L.circleMarker([p.lat, p.lon], { radius:6 }).addTo(map);
+    const cons = (p.consumption_sum != null) ? `Patēriņš: ${escapeHtml(p.consumption_sum)} m³<br>` : '';
+    m.bindPopup(`<b>${escapeHtml(p.address)}</b><br>${cons}${escapeHtml(p.submitted_at || '')}`);
+    markers.set(key, m);
+    updateMapInfo();
+  }
+
+  function updateMapInfo(){
+    document.getElementById('mapInfo').textContent = `Punkti kartē: ${markers.size}`;
+  }
+
+  function currentMonthYYYYMM(){
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2,'0');
+    return `${y}-${m}`;
+  }
+
+  function fillMonthSelect(){
+    const sel = document.getElementById('monthSel');
+    const cur = currentMonthYYYYMM();
+
+    sel.innerHTML = '';
+    const d = new Date();
+    for (let i=0;i<6;i++){
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const v = `${y}-${m}`;
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      if (v === cur) opt.selected = true;
+      sel.appendChild(opt);
+      d.setMonth(d.getMonth()-1);
+    }
+  }
+
+  async function loadMapPoints(month){
+    markers.forEach(m => map.removeLayer(m));
+    markers.clear();
+
+    const res = await fetch(`/admin/api/map_points?month=${encodeURIComponent(month)}`);
+    const j = await res.json();
+    if (!j.ok) return;
+
+    (j.points || []).forEach(addGreenPoint);
+    updateMapInfo();
+  }
+
+  function fmtTime(iso){
+    try{
+      const d = new Date(iso);
+      return d.toLocaleString('lv-LV', { hour12:false });
+    }catch{ return String(iso||''); }
+  }
+
+  async function loadLatest(month){
+    const res = await fetch(`/admin/api/latest?month=${encodeURIComponent(month)}&limit=10`);
+    const j = await res.json();
+    const tbody = document.getElementById('latestTbody');
+    tbody.innerHTML = '';
+    if (!j.ok) return;
+
+    for (const r of (j.rows || [])) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(fmtTime(r.submitted_at))}</td>
+        <td>${escapeHtml(r.address || '')}</td>
+        <td><b>${escapeHtml(r.consumption_sum || '')}</b></td>
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
+  function drawBarChart(canvas, labels, values){
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0,0,w,h);
+
+    const padL=44, padR=12, padT=12, padB=28;
+    const iw = w - padL - padR;
+    const ih = h - padT - padB;
+
+    const maxV = Math.max(1, ...values.map(v => Number(v)||0));
+
+    ctx.strokeStyle = '#ddd';
+    ctx.beginPath();
+    ctx.moveTo(padL, padT);
+    ctx.lineTo(padL, padT+ih);
+    ctx.lineTo(padL+iw, padT+ih);
+    ctx.stroke();
+
+    const n = values.length || 1;
+    const bw = iw / n;
+
+    ctx.fillStyle = '#1f5f86';
+    for (let i=0;i<n;i++){
+      const v = Number(values[i])||0;
+      const bh = (v/maxV)*ih;
+      const x = padL + i*bw + 2;
+      const y = padT + ih - bh;
+      ctx.fillRect(x, y, Math.max(2, bw-4), bh);
+    }
+
+    ctx.fillStyle = '#555';
+    ctx.font = '12px system-ui';
+    ctx.fillText('0', 10, padT+ih);
+    ctx.fillText(String(maxV), 10, padT+12);
+
+    const step = Math.ceil(n/8);
+    for (let i=0;i<n;i+=step){
+      const lbl = labels[i] || '';
+      ctx.save();
+      ctx.translate(padL + i*bw + 4, padT+ih+18);
+      ctx.rotate(-0.35);
+      ctx.fillText(lbl.slice(11,16), 0, 0);
+      ctx.restore();
+    }
+  }
+
+  async function loadByHour(month){
+    const res = await fetch(`/admin/api/by_hour?month=${encodeURIComponent(month)}`);
+    const j = await res.json();
+    if (!j.ok) return;
+
+    const rows = j.rows || [];
+    const labels = rows.map(x => x.hour);
+    const values = rows.map(x => x.cnt);
+
+    drawBarChart(document.getElementById('hourChart'), labels, values);
+  }
+
+  function prependLatestRow(p){
+    const tbody = document.getElementById('latestTbody');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(fmtTime(p.submitted_at))}</td>
+      <td>${escapeHtml(p.address || '')}</td>
+      <td><b>${escapeHtml(p.consumption_sum || '')}</b></td>
+    `;
+    tbody.prepend(tr);
+    while (tbody.children.length > 10) tbody.removeChild(tbody.lastChild);
+  }
+
+  function startSSE(){
+    const es = new EventSource('/admin/events');
+    es.addEventListener('submission', (e) => {
+      const p = JSON.parse(e.data || '{}');
+      if (p && p.lat && p.lon) addGreenPoint(p);
+      if (p && p.address) prependLatestRow(p);
+    });
+  }
+
+  async function reloadAll(){
+    const month = document.getElementById('monthSel').value;
+    await loadMapPoints(month);
+    await loadLatest(month);
+    await loadByHour(month);
+  }
+
+  document.getElementById('reloadBtn').addEventListener('click', reloadAll);
+
+  fillMonthSelect();
+  reloadAll();
+  startSSE();
+</script>
+</body>
+</html>

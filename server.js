@@ -25,10 +25,9 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const TZ = 'Europe/Riga';
 const ENFORCE_WINDOW = String(process.env.ENFORCE_WINDOW || '0') === '1';
 
-const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || '').trim(); // e.g. https://xxxxx.up.railway.app or https://radijumi.jurmalasudens.lv
+const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || '').trim();
 
-const ADMIN_KEY = (process.env.ADMIN_KEY || '').trim();         // optional (only for /api/export.csv)
-const ADMIN_USER = process.env.ADMIN_USER || '';               // required for /admin/*
+const ADMIN_USER = process.env.ADMIN_USER || '';
 const ADMIN_PASS = process.env.ADMIN_PASS || '';
 
 const RATE_LIMIT_SUBMIT_PER_10MIN = parseInt(process.env.RATE_LIMIT_SUBMIT_PER_10MIN || '20', 10);
@@ -43,23 +42,33 @@ if (!DATABASE_URL) {
 /* ===================== DB ===================== */
 const pool = new Pool({ connectionString: DATABASE_URL });
 
-/* ===================== schema ensure (light migrations) ===================== */
+/* ===================== schema ensure ===================== */
 async function ensureSchema() {
-  // allow multi-contract lookup submissions: store contract per line
+  // multi-contract submissions: store contract per line
   await pool.query(`ALTER TABLE submission_lines ADD COLUMN IF NOT EXISTS contract_nr text;`);
+
+  // history table: monthly m3 per (contract + address + month)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS history_monthly_address (
+      id bigserial PRIMARY KEY,
+      contract_nr text NOT NULL,
+      address_raw text NOT NULL,
+      month text NOT NULL, -- YYYY-MM
+      m3 numeric(14,2) NOT NULL DEFAULT 0,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(contract_nr, address_raw, month)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS history_monthly_address_month_idx ON history_monthly_address(month);`);
 }
 
 /* ===================== middleware ===================== */
 app.set('trust proxy', 1);
 
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: '512kb' }));
-app.use(express.urlencoded({ extended: false, limit: '512kb' }));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
-/* Block direct access to any addresses CSV by name */
-app.get('/adreses.csv', (req, res) => res.status(404).end());
-
-/* Static frontend from ./public */
 app.use(express.static(path.join(__dirname, 'public'), { etag: true, maxAge: '1h' }));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
@@ -70,14 +79,12 @@ const submitLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-
 const addressesLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: RATE_LIMIT_ADDR_PER_MIN,
   standardHeaders: true,
   legacyHeaders: false,
 });
-
 const lookupLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: RATE_LIMIT_LOOKUP_PER_MIN,
@@ -92,49 +99,35 @@ function getSubmissionWindow(now = DateTime.now().setZone(TZ)) {
   const isOpen = now >= start && now <= end;
   return { timezone: TZ, now: now.toISO(), start: start.toISO(), end: end.toISO(), isOpen };
 }
-
 function isWindowOpen() {
   if (!ENFORCE_WINDOW) return true;
   return getSubmissionWindow().isOpen;
 }
 
-function getClientIp(req) {
-  return req.ip || null;
-}
-
+function getClientIp(req) { return req.ip || null; }
 function getOriginOrReferer(req) {
-  return {
-    origin: (req.get('origin') || '').trim(),
-    referer: (req.get('referer') || '').trim(),
-  };
+  return { origin: (req.get('origin') || '').trim(), referer: (req.get('referer') || '').trim() };
 }
 
-/* Strict submit origin check */
 function enforceSameOrigin(req, res) {
-  if (!PUBLIC_ORIGIN) {
-    return res.status(500).json({ ok: false, error: 'Server misconfigured: PUBLIC_ORIGIN missing' });
-  }
-
+  if (!PUBLIC_ORIGIN) return res.status(500).json({ ok:false, error:'Server misconfigured: PUBLIC_ORIGIN missing' });
   const { origin, referer } = getOriginOrReferer(req);
 
   if (origin) {
-    if (origin !== PUBLIC_ORIGIN) return res.status(403).json({ ok: false, error: 'Forbidden origin' });
+    if (origin !== PUBLIC_ORIGIN) return res.status(403).json({ ok:false, error:'Forbidden origin' });
     return null;
   }
   if (referer) {
-    if (!referer.startsWith(PUBLIC_ORIGIN + '/')) return res.status(403).json({ ok: false, error: 'Forbidden referer' });
+    if (!referer.startsWith(PUBLIC_ORIGIN + '/')) return res.status(403).json({ ok:false, error:'Forbidden referer' });
     return null;
   }
-  return res.status(403).json({ ok: false, error: 'Missing origin/referer' });
+  return res.status(403).json({ ok:false, error:'Missing origin/referer' });
 }
-
-/* Soft origin check for GET endpoints (do not block if missing) */
 function enforceSameOriginSoft(req, res) {
   if (!PUBLIC_ORIGIN) return null;
   const { origin, referer } = getOriginOrReferer(req);
-
-  if (origin && origin !== PUBLIC_ORIGIN) return res.status(403).json({ ok: false, error: 'Forbidden origin' });
-  if (referer && !referer.startsWith(PUBLIC_ORIGIN + '/')) return res.status(403).json({ ok: false, error: 'Forbidden referer' });
+  if (origin && origin !== PUBLIC_ORIGIN) return res.status(403).json({ ok:false, error:'Forbidden origin' });
+  if (referer && !referer.startsWith(PUBLIC_ORIGIN + '/')) return res.status(403).json({ ok:false, error:'Forbidden referer' });
   return null;
 }
 
@@ -162,41 +155,25 @@ function requireBasicAuth(req, res, next) {
   next();
 }
 
-/* Bearer auth middleware */
-function requireAdminBearer(req, res, next) {
-  if (!ADMIN_KEY) return res.status(500).send('Server misconfigured: ADMIN_KEY missing');
-  const auth = req.get('authorization') || '';
-  const m = auth.match(/^Bearer\s+(.+)$/i);
-  if (!m) return res.status(401).send('Unauthorized');
-  if (m[1].trim() !== ADMIN_KEY) return res.status(403).send('Forbidden');
-  next();
-}
-
-/* Subscriber code: only 8 digits */
-function pickSubscriberCode(body) {
-  const v = body?.subscriber_code ?? body?.abonenta_numurs ?? body?.subscriberCode ?? body?.subscriber;
+/* Subscriber/contract validation */
+function pickSubscriberCode(bodyOrQuery) {
+  const v = bodyOrQuery?.subscriber_code ?? bodyOrQuery?.abonenta_numurs ?? bodyOrQuery?.subscriberCode ?? bodyOrQuery?.subscriber;
   const digits = String(v ?? '').trim().replace(/\D+/g, '');
   if (/^\d{8}$/.test(digits)) return digits;
   return null;
 }
-
-/* Contract number: free-form */
-function pickContractNr(body) {
-  const v = body?.contract_nr ?? body?.contractNr ?? body?.contract;
+function pickContractNr(bodyOrQuery) {
+  const v = bodyOrQuery?.contract_nr ?? bodyOrQuery?.contractNr ?? bodyOrQuery?.contract;
   const s = String(v ?? '').trim();
   if (!s) return null;
   if (s.length > 80) return null;
   return s;
 }
-
-/* Meter no digits only */
 function normalizeMeterNo(v) {
   const s = String(v ?? '').trim();
   if (!/^\d+$/.test(s)) return null;
   return s;
 }
-
-/* Reading: allow 123 / 123.4 / 123.45 / 123,45 (max 2 decimals) */
 function parseReading(value) {
   const s = String(value ?? '').trim().replace(',', '.');
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
@@ -205,41 +182,39 @@ function parseReading(value) {
   return s;
 }
 
-/* Diacritics helper */
+/* ===================== Addresses loader from XLSX (lat/lon for dashboard) ===================== */
+const ADDR_XLSX = path.join(__dirname, 'data', 'adresesJurmala.xlsx');
+let addrCache = { loadedAt: 0, mtimeMs: 0, rows: [], geoByKey: new Map() };
+
 function stripDiacritics(s) {
   return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
-
-/* ===================== Addresses loader from XLSX ===================== */
-const ADDR_XLSX = path.join(__dirname, 'data', 'adresesJurmala.xlsx');
-let addrCache = { loadedAt: 0, mtimeMs: 0, rows: [] }; // rows: { key, original }
-
 function normalizeForSearch(s) {
   return stripDiacritics(String(s || '').trim().toLowerCase())
     .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
-
+function addressBase(s) {
+  return String(s || '').split(',')[0].trim();
+}
 function loadAddressesIfNeeded() {
   if (!fs.existsSync(ADDR_XLSX)) {
-    if (addrCache.loadedAt === 0) console.warn(`ADDR_XLSX missing on server: ${ADDR_XLSX}`);
-    addrCache = { loadedAt: Date.now(), mtimeMs: 0, rows: [] };
+    addrCache = { loadedAt: Date.now(), mtimeMs: 0, rows: [], geoByKey: new Map() };
     return;
   }
 
   const stat = fs.statSync(ADDR_XLSX);
   const mtime = stat.mtimeMs;
-
   if (addrCache.loadedAt && addrCache.mtimeMs === mtime && addrCache.rows.length) return;
 
-  // Read XLSX, column "STD", take "street+nr" up to first comma
   const wb = XLSX.readFile(ADDR_XLSX);
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
   const out = [];
   const seen = new Set();
+  const geoByKey = new Map();
 
   for (const r of rows) {
     const std = String(r.STD || '').trim();
@@ -248,33 +223,46 @@ function loadAddressesIfNeeded() {
     const cleaned = std.split(',')[0].trim();
     if (!cleaned) continue;
     if (seen.has(cleaned)) continue;
-
     seen.add(cleaned);
-    out.push({ original: cleaned, key: normalizeForSearch(cleaned) });
+
+    const lat = r.DD_N == null || r.DD_N === '' ? null : Number(r.DD_N);
+    const lon = r.DD_E == null || r.DD_E === '' ? null : Number(r.DD_E);
+
+    const key = normalizeForSearch(cleaned);
+    out.push({ original: cleaned, key });
+
+    if (!geoByKey.has(key) && Number.isFinite(lat) && Number.isFinite(lon)) {
+      geoByKey.set(key, { lat, lon, original: cleaned });
+    }
   }
 
-  addrCache = { loadedAt: Date.now(), mtimeMs: mtime, rows: out };
-  console.log(`ADDR_XLSX loaded: ${out.length} addresses`);
+  addrCache = { loadedAt: Date.now(), mtimeMs: mtime, rows: out, geoByKey };
+  console.log(`ADDR_XLSX loaded: ${out.length} addresses (geo=${geoByKey.size})`);
+}
+function geoForAddress(addrRaw) {
+  loadAddressesIfNeeded();
+  const base = addressBase(addrRaw);
+  const key = normalizeForSearch(base);
+  return addrCache.geoByKey.get(key) || null;
 }
 
-/* Helpers for "12 bu" behavior, and prefix-only search */
+/* Prefix-only search + “12 bu” */
 function parseQuery(qRaw) {
   const q = normalizeForSearch(qRaw);
   const parts = q ? q.split(' ').filter(Boolean) : [];
   const nums = parts.filter(t => /^\d+$/.test(t));
   const words = parts.filter(t => /[a-zā-ž]/i.test(t));
-  return { q, parts, nums, words };
+  return { q, nums, words };
 }
-
 function hasHouseNumber(key, num) {
   const re = new RegExp(`(^|[^0-9])${num}[a-z]?([^0-9]|$)`, 'i');
   return re.test(key);
 }
 
-/* ===================== Billing snapshot (XLSX upload) ===================== */
+/* ===================== Billing snapshot upload ===================== */
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 } // 25MB
+  limits: { fileSize: 35 * 1024 * 1024 }
 });
 
 function excelDateToISO(v) {
@@ -302,12 +290,17 @@ function excelDateToISO(v) {
 
   return null;
 }
+function isoToMonth(isoDate) {
+  if (!isoDate) return null;
+  const s = String(isoDate).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  return s.slice(0, 7);
+}
 
 async function getLatestBillingBatchId(client) {
   const r = await client.query(`SELECT id FROM billing_import_batches ORDER BY uploaded_at DESC LIMIT 1`);
   return r.rowCount ? r.rows[0].id : null;
 }
-
 async function getLatestBillingBatchInfo() {
   const client = await pool.connect();
   try {
@@ -322,8 +315,6 @@ async function getLatestBillingBatchInfo() {
     client.release();
   }
 }
-
-/* ===================== DB: months list ===================== */
 async function listAvailableMonths() {
   const client = await pool.connect();
   try {
@@ -340,13 +331,34 @@ async function listAvailableMonths() {
   }
 }
 
-/* ===================== routes ===================== */
+/* ===================== SSE live (Dashboard) ===================== */
+const sseClients = new Set();
+function sseSend(res, event, obj) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(obj)}\n\n`);
+}
+async function startPgListener() {
+  const client = await pool.connect();
+  await client.query('LISTEN submissions_live');
+  client.on('notification', (msg) => {
+    if (msg.channel !== 'submissions_live') return;
+    let data = null;
+    try { data = JSON.parse(msg.payload || '{}'); } catch { data = { raw: msg.payload }; }
+    for (const res of sseClients) {
+      try { sseSend(res, 'submission', data); } catch {}
+    }
+  });
+  client.on('error', (e) => console.error('PG LISTEN error', e));
+  console.log('PG LISTEN started: submissions_live');
+}
+
+/* ===================== ROUTES ===================== */
 
 app.get('/health', async (req, res) => {
   try {
     const r = await pool.query('SELECT 1 AS ok');
     res.json({ ok: true, db: r.rows[0].ok === 1 });
-  } catch (e) {
+  } catch {
     res.status(500).json({ ok: false, error: 'db failed' });
   }
 });
@@ -365,10 +377,7 @@ app.get('/api/window', (req, res) => {
   });
 });
 
-/* ✅ Addresses search (manual mode):
-   - prefix-only for words
-   - optional "number + prefix" mode
-   - NO includes() search */
+/* Addresses autocomplete */
 app.get('/api/addresses', addressesLimiter, (req, res) => {
   const originError = enforceSameOriginSoft(req, res);
   if (originError) return;
@@ -376,7 +385,7 @@ app.get('/api/addresses', addressesLimiter, (req, res) => {
   loadAddressesIfNeeded();
 
   const qRaw = String(req.query.q || '').trim();
-  if (!qRaw) return res.json({ ok: true, items: [], results: [] });
+  if (!qRaw) return res.json({ ok:true, items:[] });
 
   const { q, nums, words } = parseQuery(qRaw);
   const out = [];
@@ -390,7 +399,7 @@ app.get('/api/addresses', addressesLimiter, (req, res) => {
       out.push(r.original);
       if (out.length >= limit) break;
     }
-    return res.json({ ok: true, items: out, results: out });
+    return res.json({ ok:true, items: out });
   }
 
   if (q && words.length && !nums.length) {
@@ -400,7 +409,7 @@ app.get('/api/addresses', addressesLimiter, (req, res) => {
         if (out.length >= limit) break;
       }
     }
-    return res.json({ ok: true, items: out, results: out });
+    return res.json({ ok:true, items: out });
   }
 
   if (nums.length && !words.length) {
@@ -411,13 +420,13 @@ app.get('/api/addresses', addressesLimiter, (req, res) => {
         if (out.length >= limit) break;
       }
     }
-    return res.json({ ok: true, items: out, results: out });
+    return res.json({ ok:true, items: out });
   }
 
-  return res.json({ ok: true, items: [], results: [] });
+  return res.json({ ok:true, items: [] });
 });
 
-/* ===================== LOOKUP ===================== */
+/* LOOKUP: ja subscriber+contract eksistē -> atgriež VISU subscriber (visi līgumi/adreses) */
 app.get('/api/lookup', lookupLimiter, async (req, res) => {
   const originError = enforceSameOriginSoft(req, res);
   if (originError) return;
@@ -433,7 +442,6 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
     const batchId = await getLatestBillingBatchId(client);
     if (!batchId) return res.json({ ok:true, found:false });
 
-    // ✅ Return "all contracts" only if subscriber+contract exists
     const okMatch = await client.query(`
       SELECT 1
       FROM billing_meters_snapshot
@@ -484,39 +492,102 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
   }
 });
 
-/* ===================== Submit: mode=lookup|manual ===================== */
+/* HISTORY API (pēdējie 12 mēneši, m3, trūkst/negatīvs=0) */
+app.get('/api/history', lookupLimiter, async (req, res) => {
+  const originError = enforceSameOriginSoft(req, res);
+  if (originError) return;
+
+  const subscriber = String(req.query.subscriber || '').trim().replace(/\D+/g, '');
+  const contract = String(req.query.contract || '').trim();
+  const address = String(req.query.address || '').trim();
+
+  if (!/^\d{8}$/.test(subscriber)) return res.status(400).json({ ok:false, error:'Invalid subscriber' });
+  if (!contract) return res.status(400).json({ ok:false, error:'Invalid contract' });
+  if (!address) return res.status(400).json({ ok:false, error:'Invalid address' });
+
+  const client = await pool.connect();
+  try {
+    const batchId = await getLatestBillingBatchId(client);
+    if (!batchId) return res.status(503).json({ ok:false, error:'Billing data not uploaded' });
+
+    // autorizācija: subscriber+contract+address eksistē snapshotā
+    const auth = await client.query(`
+      SELECT 1
+      FROM billing_meters_snapshot
+      WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr=$3 AND address_raw=$4
+      LIMIT 1
+    `, [batchId, subscriber, contract, address]);
+
+    if (!auth.rowCount) return res.status(403).json({ ok:false, error:'Not allowed' });
+
+    // atrodam pēdējo mēnesi, tad ģenerējam 12 mēnešus atpakaļ
+    const last = await client.query(`
+      SELECT month
+      FROM history_monthly_address
+      WHERE contract_nr=$1 AND address_raw=$2
+      ORDER BY month DESC
+      LIMIT 1
+    `, [contract, address]);
+
+    if (!last.rowCount) {
+      return res.json({ ok:true, contract, address, items: [] });
+    }
+
+    const lastMonth = last.rows[0].month; // YYYY-MM
+    const dt0 = DateTime.fromFormat(lastMonth + '-01', 'yyyy-MM-dd', { zone: TZ }).startOf('month');
+
+    const months = [];
+    for (let i=11; i>=0; i--) {
+      months.push(dt0.minus({ months: i }).toFormat('yyyy-MM'));
+    }
+
+    const q = await client.query(`
+      SELECT month, m3
+      FROM history_monthly_address
+      WHERE contract_nr=$1 AND address_raw=$2 AND month = ANY($3::text[])
+    `, [contract, address, months]);
+
+    const map = new Map();
+    for (const r of q.rows) {
+      const v = Number(r.m3);
+      map.set(r.month, (Number.isFinite(v) && v > 0) ? v : 0);
+    }
+
+    const items = months.map(m => ({ month: m, m3: map.get(m) ?? 0 }));
+    return res.json({ ok:true, contract, address, items });
+  } catch (e) {
+    console.error('history api error', e);
+    res.status(500).json({ ok:false, error:'Internal error' });
+  } finally {
+    client.release();
+  }
+});
+
+/* ===================== SUBMIT ===================== */
 app.post('/api/submit', submitLimiter, async (req, res) => {
   const originError = enforceSameOrigin(req, res);
   if (originError) return;
 
   if (!isWindowOpen()) {
     const info = getSubmissionWindow();
-    return res.status(403).json({ ok: false, error: 'Submission window closed', window: info });
+    return res.status(403).json({ ok:false, error:'Submission window closed', window: info });
   }
 
   const hp = String(req.body.website || req.body.honeypot || '').trim();
-  if (hp) return res.status(400).json({ ok: false, error: 'Rejected' });
+  if (hp) return res.status(400).json({ ok:false, error:'Rejected' });
 
   const mode = String(req.body.mode || 'manual').trim().toLowerCase();
-  if (mode !== 'lookup' && mode !== 'manual') {
-    return res.status(400).json({ ok:false, error:'Invalid mode' });
-  }
+  if (mode !== 'lookup' && mode !== 'manual') return res.status(400).json({ ok:false, error:'Invalid mode' });
 
   const subscriber_code = pickSubscriberCode(req.body);
-  if (!subscriber_code) {
-    return res.status(400).json({ ok: false, error: 'Invalid subscriber_code (must be 8 digits)' });
-  }
+  if (!subscriber_code) return res.status(400).json({ ok:false, error:'Invalid subscriber_code (must be 8 digits)' });
 
   const rawLines = Array.isArray(req.body.lines) ? req.body.lines : [];
-  if (!rawLines.length || rawLines.length > 400) {
-    return res.status(400).json({ ok: false, error: 'Invalid lines' });
-  }
+  if (!rawLines.length || rawLines.length > 400) return res.status(400).json({ ok:false, error:'Invalid lines' });
 
   let client_submission_id = String(req.body.client_submission_id || req.body.clientSubmissionId || '').trim();
   if (client_submission_id) {
-    if (!/^[0-9a-fA-F-]{36}$/.test(client_submission_id)) {
-      return res.status(400).json({ ok: false, error: 'Invalid client_submission_id' });
-    }
+    if (!/^[0-9a-fA-F-]{36}$/.test(client_submission_id)) return res.status(400).json({ ok:false, error:'Invalid client_submission_id' });
   } else {
     client_submission_id = crypto.randomUUID();
   }
@@ -541,33 +612,20 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
       const cleanLines = [];
       for (const l of rawLines) {
         const meter_no = normalizeMeterNo(l.meter_no ?? l.skaititaja_numurs ?? l.skaititajaNr);
-        if (!meter_no) {
-          await db.query('ROLLBACK');
-          return res.status(400).json({ ok:false, error:'Invalid meter_no (digits only)' });
-        }
+        if (!meter_no) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Invalid meter_no' }); }
 
         const lnContract = String(l.contract_nr ?? l.contractNr ?? l.contract ?? auth_contract_nr).trim();
-        if (!lnContract || lnContract.length > 80) {
-          await db.query('ROLLBACK');
-          return res.status(400).json({ ok:false, error:'Invalid contract_nr in lines' });
-        }
+        if (!lnContract || lnContract.length > 80) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Invalid contract_nr in lines' }); }
 
         const readingStr = parseReading(l.reading ?? l.radijums);
-        if (readingStr == null) {
-          await db.query('ROLLBACK');
-          return res.status(400).json({ ok:false, error:'Invalid reading (max 2 decimals, >=0)' });
-        }
+        if (readingStr == null) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Invalid reading' }); }
 
         cleanLines.push({ meter_no, reading: readingStr, contract_nr: lnContract });
       }
 
       const batchId = await getLatestBillingBatchId(db);
-      if (!batchId) {
-        await db.query('ROLLBACK');
-        return res.status(503).json({ ok:false, error:'Billing data not uploaded (admin must upload XLSX)' });
-      }
+      if (!batchId) { await db.query('ROLLBACK'); return res.status(503).json({ ok:false, error:'Billing data not uploaded' }); }
 
-      // ✅ authorize: subscriber+entered contract must exist
       const auth = await db.query(`
         SELECT 1
         FROM billing_meters_snapshot
@@ -575,50 +633,29 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
         LIMIT 1
       `, [batchId, subscriber_code, auth_contract_nr]);
 
-      if (!auth.rowCount) {
-        await db.query('ROLLBACK');
-        return res.status(400).json({ ok:false, error:'Subscriber/contract not found' });
-      }
+      if (!auth.rowCount) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Subscriber/contract not found' }); }
 
       const contractsWanted = Array.from(new Set(cleanLines.map(x => x.contract_nr)));
       const snap = await db.query(`
-        SELECT
-          contract_nr,
-          meter_serial,
-          address_raw,
-          last_reading,
-          last_reading_date,
-          next_verif_date,
-          period_from,
-          period_to,
-          meter_type,
-          stage,
-          notes,
-          qty_type,
-          client_name
+        SELECT contract_nr, meter_serial, address_raw, last_reading, last_reading_date, next_verif_date,
+               period_from, period_to, meter_type, stage, notes, qty_type, client_name
         FROM billing_meters_snapshot
         WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr = ANY($3::text[])
       `, [batchId, subscriber_code, contractsWanted]);
 
-      if (!snap.rowCount) {
-        await db.query('ROLLBACK');
-        return res.status(400).json({ ok:false, error:'Subscriber/contract not found' });
-      }
+      if (!snap.rowCount) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Subscriber/contract not found' }); }
 
-      const snapByKey = new Map(); // key = contract|meter
+      const snapByKey = new Map();
       for (const r of snap.rows) snapByKey.set(String(r.contract_nr) + '|' + String(r.meter_serial), r);
 
       for (const x of cleanLines) {
         const key = String(x.contract_nr) + '|' + String(x.meter_no);
-        if (!snapByKey.has(key)) {
-          await db.query('ROLLBACK');
-          return res.status(400).json({ ok:false, error:'Meter mismatch' });
-        }
+        if (!snapByKey.has(key)) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Meter mismatch' }); }
       }
 
       const firstSnap = snap.rows[0];
 
-      const insertSubmissionSql = `
+      const subRes = await db.query(`
         INSERT INTO submissions (
           client_submission_id, subscriber_code, contract_nr, billing_batch_id, client_name,
           address, source_origin, user_agent, ip, client_meta
@@ -632,12 +669,10 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
           client_name = EXCLUDED.client_name,
           address = EXCLUDED.address
         RETURNING id
-      `;
-
-      const subRes = await db.query(insertSubmissionSql, [
+      `, [
         client_submission_id,
         subscriber_code,
-        auth_contract_nr, // entered contract (authorization / audit)
+        auth_contract_nr,
         batchId,
         firstSnap.client_name || null,
         'MULTI',
@@ -648,26 +683,13 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
       ]);
 
       const submissionId = subRes.rows[0].id;
-
       await db.query('DELETE FROM submission_lines WHERE submission_id = $1', [submissionId]);
 
       const insertLineSql = `
         INSERT INTO submission_lines (
-          submission_id,
-          contract_nr,
-          meter_no,
-          address,
-          meter_type,
-          period_from,
-          period_to,
-          next_verif_date,
-          last_reading_date,
-          previous_reading,
-          reading,
-          consumption,
-          stage,
-          notes,
-          qty_type
+          submission_id, contract_nr, meter_no, address, meter_type, period_from, period_to,
+          next_verif_date, last_reading_date, previous_reading, reading, consumption,
+          stage, notes, qty_type
         )
         VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,
@@ -702,6 +724,34 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
       }
 
       await db.query('COMMIT');
+
+      // LIVE: katrai adresei izšaujam punktu (zaļš) uz dashboard
+      try {
+        const p = await pool.query(`
+          SELECT l.address, coalesce(sum(l.consumption),0)::numeric(14,2) AS consumption_sum
+          FROM submission_lines l
+          WHERE l.submission_id = $1 AND l.address IS NOT NULL
+          GROUP BY l.address
+        `, [submissionId]);
+
+        for (const r of p.rows) {
+          const g = geoForAddress(r.address);
+          if (!g) continue;
+          await pool.query(
+            `NOTIFY submissions_live, $1`,
+            [JSON.stringify({
+              address: r.address,
+              lat: g.lat,
+              lon: g.lon,
+              consumption_sum: String(r.consumption_sum),
+              submitted_at: new Date().toISOString()
+            })]
+          );
+        }
+      } catch (e) {
+        console.warn('live notify failed', e);
+      }
+
       return res.json({ ok:true, submission_id: submissionId, client_submission_id });
     }
 
@@ -709,22 +759,13 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
     const cleanLines = [];
     for (const l of rawLines) {
       const address = String(l.adrese ?? l.address ?? '').trim();
-      if (!address || address.length < 2 || address.length > 200) {
-        await db.query('ROLLBACK');
-        return res.status(400).json({ ok:false, error:'Invalid address' });
-      }
+      if (!address || address.length < 2 || address.length > 200) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Invalid address' }); }
 
       const meter_no = normalizeMeterNo(l.meter_no ?? l.skaititaja_numurs ?? l.skaititajaNr);
-      if (!meter_no) {
-        await db.query('ROLLBACK');
-        return res.status(400).json({ ok:false, error:'Invalid meter_no (digits only)' });
-      }
+      if (!meter_no) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Invalid meter_no' }); }
 
       const readingStr = parseReading(l.reading ?? l.radijums);
-      if (readingStr == null) {
-        await db.query('ROLLBACK');
-        return res.status(400).json({ ok:false, error:'Invalid reading (max 2 decimals, >=0)' });
-      }
+      if (readingStr == null) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Invalid reading' }); }
 
       cleanLines.push({ address, meter_no, reading: readingStr });
     }
@@ -732,43 +773,54 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
     const addrSet = new Set(cleanLines.map(x => x.address));
     const submissionAddress = addrSet.size === 1 ? cleanLines[0].address : 'MULTI';
 
-    const insertSubmissionSql = `
+    const subRes = await db.query(`
       INSERT INTO submissions (client_submission_id, subscriber_code, address, source_origin, user_agent, ip, client_meta)
-      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
       ON CONFLICT (client_submission_id)
-      DO UPDATE SET
-        subscriber_code = EXCLUDED.subscriber_code,
-        address = EXCLUDED.address
+      DO UPDATE SET subscriber_code = EXCLUDED.subscriber_code, address = EXCLUDED.address
       RETURNING id
-    `;
-
-    const subRes = await db.query(insertSubmissionSql, [
-      client_submission_id,
-      subscriber_code,
-      submissionAddress,
-      source_origin,
-      ua,
-      ip,
-      JSON.stringify(clientMeta),
-    ]);
+    `, [client_submission_id, subscriber_code, submissionAddress, source_origin, ua, ip, JSON.stringify(clientMeta)]);
 
     const submissionId = subRes.rows[0].id;
-
     await db.query('DELETE FROM submission_lines WHERE submission_id = $1', [submissionId]);
 
-    const insertLineSql = `
-      INSERT INTO submission_lines (submission_id, contract_nr, meter_no, address, previous_reading, reading, consumption)
-      VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::numeric)
-    `;
-
     for (const l of cleanLines) {
-      await db.query(insertLineSql, [submissionId, null, l.meter_no, l.address, null, l.reading, null]);
+      await db.query(`
+        INSERT INTO submission_lines (submission_id, contract_nr, meter_no, address, previous_reading, reading, consumption)
+        VALUES ($1,$2,$3,$4,$5::numeric,$6::numeric,$7::numeric)
+      `, [submissionId, null, l.meter_no, l.address, null, l.reading, null]);
     }
 
     await db.query('COMMIT');
+
+    // LIVE: manual arī dod punktu, ja var atrast koordinātas
+    try {
+      const p = await pool.query(`
+        SELECT DISTINCT l.address
+        FROM submission_lines l
+        WHERE l.submission_id = $1 AND l.address IS NOT NULL
+      `, [submissionId]);
+
+      for (const r of p.rows) {
+        const g = geoForAddress(r.address);
+        if (!g) continue;
+        await pool.query(
+          `NOTIFY submissions_live, $1`,
+          [JSON.stringify({
+            address: r.address,
+            lat: g.lat,
+            lon: g.lon,
+            submitted_at: new Date().toISOString()
+          })]
+        );
+      }
+    } catch (e) {
+      console.warn('live notify failed', e);
+    }
+
     return res.json({ ok:true, submission_id: submissionId, client_submission_id });
   } catch (err) {
-    try { await db.query('ROLLBACK'); } catch (_) {}
+    try { await db.query('ROLLBACK'); } catch {}
     console.error('submit error', err);
     return res.status(500).json({ ok:false, error:'Internal error' });
   } finally {
@@ -776,102 +828,260 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
   }
 });
 
-/* ===================== Admin UI ===================== */
+/* ===================== ADMIN: Landing + 4 pages ===================== */
 
-app.get('/admin', requireBasicAuth, async (req, res) => {
-  try {
-    const months = await listAvailableMonths();
-    const latest = await getLatestBillingBatchInfo();
-
-    const optionsHtml = months.length
-      ? months.map((m, i) => `<option value="${m}" ${i === 0 ? 'selected' : ''}>${m}</option>`).join('')
-      : `<option value="" disabled selected>Nav datu</option>`;
-
-    const latestHtml = latest
-      ? `<div class="muted"><b>Billing XLSX:</b> pēdējais batch #${latest.id} (${latest.source_filename || 'file'}) — ${String(latest.uploaded_at)}</div>`
-      : `<div class="muted"><b>Billing XLSX:</b> nav ielādēts (lookup nestrādās).</div>`;
-
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`
-<!doctype html>
+function pageShell(title, bodyHtml) {
+  return `<!doctype html>
 <html lang="lv">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Admin</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; }
-    .card { max-width: 740px; border: 1px solid #ddd; border-radius: 12px; padding: 16px; }
-    label { display:block; margin: 10px 0 6px; font-weight: 800; }
-    select, input, button { width: 100%; padding: 10px; font-size: 16px; }
-    button { margin-top: 12px; font-weight: 900; cursor: pointer; }
-    .muted { color:#666; font-size: 13px; margin-top: 10px; }
-    .hr { border-top: 1px solid #eee; margin: 16px 0; }
-    .danger { margin-top: 18px; border-top: 1px solid #eee; padding-top: 14px; }
-    .danger h3 { margin: 0 0 8px; color: #b00020; }
-    .danger small { color:#666; display:block; margin-top: 6px; }
-    .danger button { background:#b00020; color:#fff; border:none; border-radius:10px; }
-    .ok { background:#1f5f86; color:#fff; border:none; border-radius:10px; }
-    code { background:#f3f5f8; padding:2px 6px; border-radius:8px; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>${title}</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:24px;background:#f6f7f9;color:#111}
+  .wrap{max-width:860px;margin:0 auto}
+  .card{background:#fff;border:1px solid #d8dde3;border-radius:16px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,.06)}
+  h1{margin:0 0 12px;font-size:18px;font-weight:900}
+  .grid{display:grid;grid-template-columns:1fr;gap:10px}
+  @media(min-width:720px){.grid{grid-template-columns:1fr 1fr}}
+  a.btn,button.btn{display:block;text-decoration:none;text-align:center;padding:14px 12px;border-radius:14px;border:1px solid #d8dde3;background:#fff;font-weight:900;color:#111;cursor:pointer}
+  a.btn:hover,button.btn:hover{background:#eef3f8}
+  .muted{color:#666;font-size:12px;margin-top:10px}
+  label{display:block;margin:10px 0 6px;font-weight:900}
+  input,select{width:100%;padding:10px 12px;border-radius:12px;border:1px solid #d8dde3;font:inherit}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .danger{border:1px solid #f0c9cf;background:#fff5f7;border-radius:14px;padding:12px;margin-top:14px}
+  .danger h3{margin:0 0 6px;color:#7a0016}
+  .ok{background:#1f5f86;color:#fff;border-color:#1f5f86}
+</style>
 </head>
 <body>
-  <div class="card">
-    <h2>Admin</h2>
+<div class="wrap"><div class="card">
+${bodyHtml}
+</div></div>
+</body></html>`;
+}
+
+app.get('/admin', requireBasicAuth, async (req, res) => {
+  const latest = await getLatestBillingBatchInfo();
+  const latestHtml = latest
+    ? `<div class="muted"><b>Billing snapshot:</b> batch #${latest.id} (${latest.source_filename || 'file'}) — ${String(latest.uploaded_at)}</div>`
+    : `<div class="muted"><b>Billing snapshot:</b> nav ielādēts (lookup nestrādās).</div>`;
+
+  const html = pageShell('Admin', `
+    <h1>Admin</h1>
     ${latestHtml}
+    <div class="muted">Izvēlies darbību:</div>
+    <div class="grid" style="margin-top:12px">
+      <a class="btn ok" href="/admin/billing">Ielādēt pēdējo periodu</a>
+      <a class="btn ok" href="/admin/history">Ielādēt 12 mēnešu pārskatu</a>
+      <a class="btn" href="/admin/analytics">Dashboard</a>
+      <a class="btn" href="/admin/exports">Iesniegtie dati</a>
+    </div>
+  `);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.end(html);
+});
 
-    <div class="hr"></div>
+app.get('/admin/billing', requireBasicAuth, async (req, res) => {
+  const latest = await getLatestBillingBatchInfo();
+  const latestHtml = latest
+    ? `<div class="muted"><b>Pēdējais billing batch:</b> #${latest.id} (${latest.source_filename || 'file'}) — ${String(latest.uploaded_at)}</div>`
+    : `<div class="muted"><b>Pēdējais billing batch:</b> nav ielādēts.</div>`;
 
-    <h3>1) Ielādēt billing XLSX (jaunākais)</h3>
-    <form method="POST" action="/admin/billing/upload" enctype="multipart/form-data">
-      <label for="file">XLSX fails</label>
-      <input id="file" name="file" type="file" accept=".xlsx" required />
-      <button type="submit" class="ok">Ielādēt XLSX</button>
-      <div class="muted">Pēc ielādes /api/lookup izmantos šo pēdējo batch automātiski.</div>
+  const html = pageShell('Billing upload', `
+    <h1>Ielādēt pēdējo periodu (billing snapshot)</h1>
+    ${latestHtml}
+    <form method="POST" action="/admin/billing/upload" enctype="multipart/form-data" style="margin-top:12px">
+      <label>XLSX fails (billing snapshot)</label>
+      <input name="file" type="file" accept=".xlsx" required />
+      <button class="btn ok" type="submit" style="margin-top:12px">Ielādēt XLSX</button>
+    </form>
+    <div class="muted" style="margin-top:10px"><a href="/admin">← atpakaļ</a></div>
+  `);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.end(html);
+});
+
+app.get('/admin/history', requireBasicAuth, async (req, res) => {
+  const html = pageShell('History upload', `
+    <h1>Ielādēt 12 mēnešu pārskatu (vēsturiskais patēriņš)</h1>
+    <div class="muted">Uploads ir no billing sistēmas (tavs 16MB XLSX). Importē: contract + adrese + Periods līdz + Daudzums iev.</div>
+
+    <form method="POST" action="/admin/history/upload" enctype="multipart/form-data" style="margin-top:12px">
+      <label>XLSX fails (12 mēnešu pārskats)</label>
+      <input name="file" type="file" accept=".xlsx" required />
+      <button class="btn ok" type="submit" style="margin-top:12px">Ielādēt vēsturi</button>
     </form>
 
-    <div class="hr"></div>
+    <div class="muted" style="margin-top:10px"><a href="/admin">← atpakaļ</a></div>
+  `);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.end(html);
+});
 
-    <h3>2) Eksports</h3>
+app.get('/admin/analytics', requireBasicAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin-analytics.html'));
+});
+
+app.get('/admin/exports', requireBasicAuth, async (req, res) => {
+  const months = await listAvailableMonths();
+  const optionsHtml = months.length
+    ? months.map((m, i) => `<option value="${m}" ${i === 0 ? 'selected' : ''}>${m}</option>`).join('')
+    : `<option value="" disabled selected>Nav datu</option>`;
+
+  const html = pageShell('Exports', `
+    <h1>Iesniegtie dati</h1>
 
     <form method="GET" action="/admin/export.xlsx">
-      <label for="monthX">XLSX eksports pēc veidnes</label>
-      <select id="monthX" name="month" ${months.length ? '' : 'disabled'}>
-        ${optionsHtml}
-      </select>
-      <button type="submit" ${months.length ? '' : 'disabled'} class="ok">Lejupielādēt export.xlsx</button>
-      <div class="muted">Izmanto veidni: <code>data/billing_template.xlsx</code></div>
+      <label>XLSX eksports (pēc veidnes)</label>
+      <select name="month" ${months.length ? '' : 'disabled'}>${optionsHtml}</select>
+      <button class="btn ok" type="submit" ${months.length ? '' : 'disabled'} style="margin-top:12px">Lejupielādēt export.xlsx</button>
     </form>
 
-    <form method="GET" action="/admin/export.csv">
-      <label for="month">CSV (debug)</label>
-      <select id="month" name="month" ${months.length ? '' : 'disabled'}>
-        ${optionsHtml}
-      </select>
-      <button type="submit" ${months.length ? '' : 'disabled'}>Eksportēt</button>
+    <form method="GET" action="/admin/export.csv" style="margin-top:12px">
+      <label>CSV (debug)</label>
+      <select name="month" ${months.length ? '' : 'disabled'}>${optionsHtml}</select>
+      <button class="btn" type="submit" ${months.length ? '' : 'disabled'} style="margin-top:12px">Lejupielādēt export.csv</button>
     </form>
 
     <div class="danger">
       <h3>Dzēst visus iesniegumus</h3>
-      <div class="muted">Šī darbība neatgriezeniski izdzēsīs visus iesniegumus no DB.</div>
-      <form method="POST" action="/admin/clear">
-        <label for="confirm">Ieraksti <b>DELETE</b>, lai apstiprinātu</label>
-        <input id="confirm" name="confirm" autocomplete="off" />
-        <button type="submit">Dzēst visu</button>
-        <small>Drošībai: bez “DELETE” ievades dzēšana nenotiks.</small>
+      <div class="muted">Ieraksti <b>DELETE</b>, lai apstiprinātu.</div>
+      <form method="POST" action="/admin/clear" style="margin-top:10px">
+        <input name="confirm" autocomplete="off" />
+        <button class="btn" type="submit" style="margin-top:10px">Dzēst visu</button>
       </form>
     </div>
-  </div>
-</body>
-</html>
-    `);
+
+    <div class="muted" style="margin-top:10px"><a href="/admin">← atpakaļ</a></div>
+  `);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.end(html);
+});
+
+/* Admin SSE */
+app.get('/admin/events', requireBasicAuth, (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  sseClients.add(res);
+  sseSend(res, 'hello', { ok:true, ts: new Date().toISOString() });
+
+  req.on('close', () => {
+    sseClients.delete(res);
+  });
+});
+
+/* Admin analytics APIs */
+app.get('/admin/api/latest', requireBasicAuth, async (req, res) => {
+  const month = String(req.query.month || '').trim(); // YYYY-MM
+  const limit = Math.min(parseInt(req.query.limit || '10', 10) || 10, 50);
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ ok:false, error:'Invalid month' });
+
+  const client = await pool.connect();
+  try {
+    const q = await client.query(`
+      SELECT
+        s.id,
+        s.submitted_at,
+        s.address,
+        coalesce(sum(l.consumption), 0)::numeric(12,2) AS consumption_sum
+      FROM submissions s
+      JOIN submission_lines l ON l.submission_id = s.id
+      WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
+      GROUP BY s.id, s.submitted_at, s.address
+      ORDER BY s.submitted_at DESC
+      LIMIT $3
+    `, [TZ, month, limit]);
+
+    res.json({ ok:true, rows: q.rows });
   } catch (e) {
-    console.error('admin page error', e);
-    res.status(500).send('Admin page error');
+    console.error('latest api error', e);
+    res.status(500).json({ ok:false, error:'Internal error' });
+  } finally {
+    client.release();
   }
 });
 
-/* ===== Admin: billing XLSX upload -> snapshot tables ===== */
+app.get('/admin/api/by_hour', requireBasicAuth, async (req, res) => {
+  const month = String(req.query.month || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ ok:false, error:'Invalid month' });
+
+  const client = await pool.connect();
+  try {
+    const q = await client.query(`
+      SELECT
+        to_char(date_trunc('hour', submitted_at AT TIME ZONE $1), 'YYYY-MM-DD HH24:00') AS hour,
+        count(*)::int AS cnt
+      FROM submissions
+      WHERE to_char(date_trunc('month', submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
+      GROUP BY 1
+      ORDER BY 1
+    `, [TZ, month]);
+
+    res.json({ ok:true, rows: q.rows });
+  } catch (e) {
+    console.error('by_hour api error', e);
+    res.status(500).json({ ok:false, error:'Internal error' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/admin/api/map_points', requireBasicAuth, async (req, res) => {
+  const month = String(req.query.month || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ ok:false, error:'Invalid month' });
+
+  const client = await pool.connect();
+  try {
+    const q = await client.query(`
+      SELECT DISTINCT l.address
+      FROM submissions s
+      JOIN submission_lines l ON l.submission_id = s.id
+      WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
+        AND l.address IS NOT NULL
+    `, [TZ, month]);
+
+    const pts = [];
+    for (const r of q.rows) {
+      const g = geoForAddress(r.address);
+      if (!g) continue;
+      pts.push({ address: r.address, lat: g.lat, lon: g.lon });
+    }
+
+    res.json({ ok:true, points: pts });
+  } catch (e) {
+    console.error('map_points api error', e);
+    res.status(500).json({ ok:false, error:'Internal error' });
+  } finally {
+    client.release();
+  }
+});
+
+/* Admin: clear */
+app.post('/admin/clear', requireBasicAuth, async (req, res) => {
+  const confirm = String(req.body.confirm || '').trim();
+  if (confirm !== 'DELETE') return res.status(400).send('Nepareizs apstiprinājums. Ieraksti DELETE.');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('TRUNCATE TABLE submission_lines, submissions RESTART IDENTITY CASCADE;');
+    await client.query('COMMIT');
+    return res.redirect('/admin/exports');
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('admin clear error', e);
+    return res.status(500).send('Dzēšana neizdevās.');
+  } finally {
+    client.release();
+  }
+});
+
+/* ===================== Admin: billing XLSX upload ===================== */
 app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).send('No file');
   const filename = req.file.originalname || 'billing.xlsx';
@@ -972,24 +1182,9 @@ app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async
     }
 
     await client.query('COMMIT');
-
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`
-<!doctype html>
-<html lang="lv">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OK</title>
-<style>body{font-family:system-ui;margin:24px}a{display:inline-block;margin-top:12px}</style>
-</head>
-<body>
-  <h2>OK — XLSX ielādēts</h2>
-  <div>Izveidots billing batch: <b>#${batchId}</b></div>
-  <a href="/admin">Atpakaļ uz admin</a>
-</body>
-</html>
-    `);
+    return res.redirect('/admin/billing');
   } catch (e) {
-    try { await client.query('ROLLBACK'); } catch (_) {}
+    try { await client.query('ROLLBACK'); } catch {}
     console.error('billing upload error', e);
     res.status(500).send('Upload failed');
   } finally {
@@ -997,46 +1192,117 @@ app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async
   }
 });
 
-app.post('/admin/clear', requireBasicAuth, async (req, res) => {
-  const confirm = String(req.body.confirm || '').trim();
-  if (confirm !== 'DELETE') {
-    res.status(400);
-    return res.send('Nepareizs apstiprinājums. Ieraksti DELETE.');
+/* ===================== Admin: history XLSX upload ===================== */
+function findHeaderRow(rows, wantedNames) {
+  // meklē 0..60 rindas, kur ir vismaz 3 no 4
+  for (let i=0; i<Math.min(rows.length, 60); i++) {
+    const r = rows[i];
+    if (!Array.isArray(r)) continue;
+    const cells = r.map(x => String(x ?? '').trim()).filter(Boolean);
+    let hit = 0;
+    for (const w of wantedNames) if (cells.includes(w)) hit++;
+    if (hit >= 3) return i;
+  }
+  return -1;
+}
+
+app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).send('No file');
+
+  const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+
+  // kandidāti (tavam failam jātrāpa vismaz 3/4)
+  const WANT = ['NĪPLigPap.NĪPLīg.Numurs', 'NĪO adrese', 'Periods līdz', 'Daudzums iev.'];
+  const headerRowIndex = findHeaderRow(rows, WANT);
+
+  if (headerRowIndex === -1) {
+    return res.status(400).send('History header not found (need contract/address/period/consumption columns).');
+  }
+
+  const header = rows[headerRowIndex].map(x => String(x ?? '').trim());
+  const col = (name) => header.indexOf(name);
+
+  // stingri: tieši šie nosaukumi
+  const iContract = col('NĪPLigPap.NĪPLīg.Numurs');
+  const iAddr = col('NĪO adrese');
+  const iPeriodTo = col('Periods līdz');
+  const iQty = col('Daudzums iev.');
+
+  if (iContract < 0 || iAddr < 0 || iPeriodTo < 0 || iQty < 0) {
+    return res.status(400).send('Missing required history columns.');
+  }
+
+  const dataRows = rows.slice(headerRowIndex + 1);
+
+  // agregējam: key=(contract|address|month) -> m3
+  const agg = new Map();
+
+  for (const r of dataRows) {
+    if (!Array.isArray(r) || !r.length) continue;
+
+    const contract = String(r[iContract] ?? '').trim();
+    const address = String(r[iAddr] ?? '').trim();
+    const periodToIso = excelDateToISO(r[iPeriodTo]);
+    const month = isoToMonth(periodToIso);
+
+    if (!contract || !address || !month) continue;
+
+    const qtyRaw = r[iQty];
+    let m3 = (qtyRaw == null || qtyRaw === '') ? 0 : Number(qtyRaw);
+    if (!Number.isFinite(m3) || m3 < 0) m3 = 0;
+
+    const key = contract + '|' + address + '|' + month;
+    agg.set(key, (agg.get(key) || 0) + m3);
   }
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('TRUNCATE TABLE submission_lines, submissions RESTART IDENTITY CASCADE;');
+
+    const up = `
+      INSERT INTO history_monthly_address (contract_nr, address_raw, month, m3, updated_at)
+      VALUES ($1,$2,$3,$4::numeric, now())
+      ON CONFLICT (contract_nr, address_raw, month)
+      DO UPDATE SET m3 = EXCLUDED.m3, updated_at = now()
+    `;
+
+    let count = 0;
+    for (const [key, sum] of agg.entries()) {
+      const [contract, address, month] = key.split('|');
+      const v = Number.isFinite(sum) && sum > 0 ? sum : 0;
+      await client.query(up, [contract, address, month, v.toFixed(2)]);
+      count++;
+    }
+
     await client.query('COMMIT');
-    return res.redirect('/admin');
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(pageShell('History OK', `
+      <h1>OK — vēsture ielādēta</h1>
+      <div class="muted">Importētas/atjaunotas rindas: <b>${count}</b></div>
+      <div class="muted" style="margin-top:10px"><a href="/admin/history">← atpakaļ</a></div>
+    `));
   } catch (e) {
-    try { await client.query('ROLLBACK'); } catch (_) {}
-    console.error('admin clear error', e);
-    return res.status(500).send('Dzēšana neizdevās.');
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('history upload error', e);
+    res.status(500).send('History upload failed');
   } finally {
     client.release();
   }
 });
 
-/* ===================== Export CSV (debug) ===================== */
+/* ===================== Exports CSV/XLSX ===================== */
 async function exportCsv(res, req) {
-  const month = String(req?.query?.month || '').trim(); // YYYY-MM
+  const month = String(req?.query?.month || '').trim();
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="export.csv"');
 
   res.write(toCSVRow([
-    'submission_id',
-    'client_submission_id',
-    'subscriber_code',
-    'contract_nr',
-    'address',
-    'submitted_at_utc',
-    'meter_no',
-    'previous_reading',
-    'reading',
-    'consumption'
+    'submission_id','client_submission_id','subscriber_code','contract_nr','address',
+    'submitted_at_utc','meter_no','previous_reading','reading','consumption'
   ]));
 
   const client = await pool.connect();
@@ -1094,11 +1360,6 @@ app.get('/admin/export.csv', requireBasicAuth, async (req, res) => {
   await exportCsv(res, req);
 });
 
-app.get('/api/export.csv', requireAdminBearer, async (req, res) => {
-  await exportCsv(res, req);
-});
-
-/* ===================== Export XLSX (template) ===================== */
 const TEMPLATE_PATH = path.join(__dirname, 'data', 'billing_template.xlsx');
 
 function toExcelDate(v) {
@@ -1108,7 +1369,6 @@ function toExcelDate(v) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   return new Date(s + 'T00:00:00Z');
 }
-
 function findHeaderMap(ws, headersWanted) {
   for (let r = 1; r <= 15; r++) {
     const row = ws.getRow(r);
@@ -1125,20 +1385,15 @@ function findHeaderMap(ws, headersWanted) {
       if (headersWanted.includes(t)) { map.set(t, c); hit++; }
     }
 
-    if (hit >= Math.min(5, headersWanted.length)) {
-      return { headerRow: r, map };
-    }
+    if (hit >= Math.min(5, headersWanted.length)) return { headerRow: r, map };
   }
   return null;
 }
 
 app.get('/admin/export.xlsx', requireBasicAuth, async (req, res) => {
-  const month = String(req?.query?.month || '').trim(); // YYYY-MM
+  const month = String(req?.query?.month || '').trim();
 
-  if (!fs.existsSync(TEMPLATE_PATH)) {
-    res.status(500);
-    return res.send('Template missing: data/billing_template.xlsx');
-  }
+  if (!fs.existsSync(TEMPLATE_PATH)) return res.status(500).send('Template missing: data/billing_template.xlsx');
 
   const client = await pool.connect();
   try {
@@ -1178,24 +1433,20 @@ app.get('/admin/export.xlsx', requireBasicAuth, async (req, res) => {
     const ws = wb.worksheets[0];
 
     const headersWanted = [
-      'Skait. veids', 'Līg. Nr.', 'Klients', 'Klienta kods', 'NĪO adrese',
-      'Periods no', 'Periods līdz', 'Skait. eks. Nr',
-      'Nāk. verifikācijas datums', 'Pēdējā rādījuma datums',
-      'Pēdējais rādījums', 'Daudzums iev.', 'Rādījums',
-      'Stadija', 'Piezīmes', 'Daudzuma tips'
+      'Skait. veids','Līg. Nr.','Klients','Klienta kods','NĪO adrese',
+      'Periods no','Periods līdz','Skait. eks. Nr',
+      'Nāk. verifikācijas datums','Pēdējā rādījuma datums',
+      'Pēdējais rādījums','Daudzums iev.','Rādījums',
+      'Stadija','Piezīmes','Daudzuma tips'
     ];
 
     const headerInfo = findHeaderMap(ws, headersWanted);
-    if (!headerInfo) {
-      res.status(500);
-      return res.send('Template headers not found (check billing_template.xlsx).');
-    }
+    if (!headerInfo) return res.status(500).send('Template headers not found.');
 
     const headerRow = headerInfo.headerRow;
     const map = headerInfo.map;
     const startRow = headerRow + 1;
 
-    // Clear old data
     const maxClear = Math.max(ws.rowCount, startRow + 1500);
     for (let i = startRow; i <= maxClear; i++) {
       const row = ws.getRow(i);
@@ -1260,6 +1511,7 @@ app.get('/admin/export.xlsx', requireBasicAuth, async (req, res) => {
 (async () => {
   try {
     await ensureSchema();
+    await startPgListener();
     app.listen(PORT, () => {
       console.log(`server listening on :${PORT} (enforceWindow=${ENFORCE_WINDOW}, tz=${TZ})`);
     });

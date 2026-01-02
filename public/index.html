@@ -76,14 +76,21 @@
     .lookupBox.good{ border-color:#cfe8d6; background:#f3fff6; }
     .lookupBox.bad{ border-color:#f0c9cf; background:#fff5f7; color:#7a0016; }
 
-    .labelRow{ display:flex; align-items:center; gap:8px; }
-    .infoIcon{
-      width:22px;height:22px;border-radius:999px;border:2px solid #cfd6de;
-      background:#fff;color:#1f5f86;font-weight:1000;line-height:18px;
-      cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
-      padding:0;flex:0 0 22px;
+    /* palīdzības rinda: teksts + sarkans ? */
+    .helpRow{ display:flex; align-items:center; gap:10px; margin-top:6px; }
+    .helpLink{
+      font-size:13px; font-weight:900; color:var(--blue);
+      cursor:pointer; user-select:none;
     }
-    .infoIcon:hover{ background:#eef3f8; }
+    .helpLink:hover{ text-decoration:underline; }
+    .helpQ{
+      width:34px; height:34px; border-radius:999px;
+      border:none; background:var(--danger); color:#fff;
+      font-weight:1000; cursor:pointer;
+      display:inline-flex; align-items:center; justify-content:center;
+      box-shadow:0 6px 18px rgba(176,0,32,.25);
+    }
+    .helpQ:active{ transform:translateY(1px); }
 
     /* 8 ciparu lauki */
     .code-boxes{ display:flex; gap:8px; width:fit-content; max-width:100%; overflow:hidden; }
@@ -118,23 +125,17 @@
       background:#fff;
       position:relative;
     }
-    .address-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
-    .address-head.auto-head{ justify-content:flex-start; }
-    .auto-address-title{ font-size:13px; font-weight:1000; color:#111; }
+    .address-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:8px; }
+    .auto-address-title{ font-size:13px; font-weight:1000; color:#111; padding-top:2px; }
 
-    .badge{
-      font-size:12px; color:#1b1b1b; font-weight:900;
-      background:#eef3f8; border-radius:999px; padding:6px 10px;
+    .addrActions{ display:flex; align-items:center; gap:10px; }
+    .histBtn{
+      border-radius:12px; border:2px solid #cfd6de; background:#fff;
+      padding:8px 10px; cursor:pointer; font-weight:1000; color:#111;
+      display:inline-flex; align-items:center; gap:8px;
     }
-    .badge.hidden{ display:none; }
-
-    .delete-address-btn{
-      border-radius:14px; border:2px solid #f0c9cf; background:#fff;
-      padding:10px 12px; cursor:pointer; font-weight:900; color:var(--danger);
-      white-space:nowrap;
-    }
-    .delete-address-btn.hidden{ display:none; }
-    .delete-address-btn:disabled{ opacity:.35; cursor:not-allowed; }
+    .histBtn:hover{ background:#eef3f8; }
+    .histBtn span{ font-size:16px; }
 
     .meters{ margin-top:10px; display:flex; flex-direction:column; gap:10px; }
 
@@ -167,7 +168,8 @@
       .del-btn span{ display:none; }
       .del-btn::before{ content:"Dzēst skaitītāju"; }
       .address-head{ flex-direction:column; align-items:stretch; gap:8px; }
-      .delete-address-btn{ width:100%; }
+      .addrActions{ justify-content:flex-end; }
+      .histBtn{ width:100%; justify-content:center; }
     }
 
     /* autocomplete */
@@ -191,7 +193,7 @@
     }
     .infoBox.show{ display:block; }
 
-    /* AUTO section (pēc noklusējuma slēpts) */
+    /* AUTO */
     #autoSection{ display:none; margin-top:10px; }
     .auto-meter-row{
       display:grid;
@@ -204,64 +206,30 @@
     @media (max-width:640px){ .auto-meter-row{ grid-template-columns: 1fr; } }
 
     /* submit modal */
-    #submitModal { position: fixed; inset: 0; z-index: 9999; display:none; }
-    #submitModalBackdrop { position: absolute; inset: 0; background: rgba(0,0,0,.35); }
-    #submitModalCard{
+    #submitModal, #notFoundModal, #helpModal, #historyModal { position: fixed; inset: 0; z-index: 9999; display:none; }
+    .modalBackdrop { position: absolute; inset: 0; background: rgba(0,0,0,.35); }
+    .modalCard{
       position:absolute; left:50%; top:50%; transform: translate(-50%,-50%);
-      width:min(420px, calc(100vw - 32px));
+      width:min(560px, calc(100vw - 32px));
       background:#fff; border:1px solid #e5e7eb; border-radius:16px;
-      padding:16px 16px 14px; box-shadow: 0 18px 50px rgba(0,0,0,.18);
+      padding:16px; box-shadow: 0 18px 50px rgba(0,0,0,.18);
     }
-    #submitModalTitle{ font-weight:900; font-size:16px; margin:0 0 6px; }
-    #submitModalText{ font-size:14px; color:#333; margin:0 0 12px; }
-    #submitModalActions{ display:flex; gap:10px; justify-content:flex-end; }
-    #submitModalCloseBtn, #submitModalRetryBtn{
-      border-radius:12px; padding:10px 12px; font-weight:900; cursor:pointer;
-      border:2px solid #cfd6de; background:#fff;
-    }
-    #submitModalCloseBtn{ border-color: var(--blue); color: var(--blue); }
-    #submitModalRetryBtn{ border-color: var(--danger); color: var(--danger); }
-    @media (max-width:640px){
-      #submitModalActions{ justify-content:stretch; }
-      #submitModalCloseBtn, #submitModalRetryBtn{ width:100%; }
-    }
-
-    /* not found modal */
-    #notFoundModal { position: fixed; inset: 0; z-index: 9998; display:none; }
-    #notFoundBackdrop { position: absolute; inset: 0; background: rgba(0,0,0,.35); }
-    #notFoundCard{
-      position:absolute; left:50%; top:50%; transform: translate(-50%,-50%);
-      width:min(520px, calc(100vw - 32px));
-      background:#fff; border:1px solid #e5e7eb; border-radius:16px;
-      padding:16px 16px 14px; box-shadow: 0 18px 50px rgba(0,0,0,.18);
-    }
-    #notFoundTitle{ font-weight:900; font-size:16px; margin:0 0 6px; color:#111; }
-    #notFoundText{ font-size:14px; color:#333; margin:0 0 12px; }
-    #notFoundActions{ display:flex; gap:10px; justify-content:flex-end; }
+    .modalTitle{ font-weight:900; font-size:16px; margin:0 0 8px; }
+    .modalText{ font-size:14px; color:#333; margin:0 0 12px; }
+    .modalActions{ display:flex; gap:10px; justify-content:flex-end; }
     .btn-outline{
       border-radius:12px; padding:10px 12px; font-weight:900; cursor:pointer;
       border:2px solid #cfd6de; background:#fff;
     }
     .btn-outline.primary{ border-color: var(--blue); color: var(--blue); }
     .btn-outline.danger{ border-color: var(--danger); color: var(--danger); }
-    @media (max-width:640px){
-      #notFoundActions{ flex-direction:column; }
-      .btn-outline{ width:100%; }
-    }
 
-    /* help modal */
-    #helpModal{ position:fixed; inset:0; z-index:9997; display:none; }
-    #helpBackdrop{ position:absolute; inset:0; background:rgba(0,0,0,.35); }
-    #helpCard{
-      position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-      width:min(560px, calc(100vw - 32px));
-      background:#fff; border:1px solid #e5e7eb; border-radius:16px;
-      padding:16px; box-shadow:0 18px 50px rgba(0,0,0,.18);
-    }
-    #helpTitle{ font-weight:900; font-size:16px; margin:0 0 8px; }
-    #helpText{ font-size:14px; color:#333; margin:0 0 12px; }
     #helpImg{ width:100%; height:auto; border-radius:12px; border:1px solid #e5e7eb; display:block; }
-    #helpActions{ display:flex; justify-content:flex-end; margin-top:12px; }
+
+    /* history */
+    #histCanvas{ width:100%; height:240px; border:1px solid #eee; border-radius:14px; }
+    #histMeta{ font-size:12px; color:#666; margin-top:8px; }
+    #histLoading{ font-size:13px; color:#333; margin-bottom:10px; }
 
     #manualSection{ display:none; }
   </style>
@@ -278,36 +246,34 @@
     <div class="section-title">Abonenta informācija</div>
 
     <div class="field">
-      <div class="labelRow">
-        <label style="margin:0;">Abonenta numurs (8 cipari, sākas ar 012)</label>
-        <button type="button" class="infoIcon" id="helpBtn1" aria-label="Kur atrast abonenta kodu un līguma numuru?">i</button>
-      </div>
+      <label>Abonenta numurs (8 cipari)</label>
       <div class="code-boxes" id="abonentaCodeBoxes"></div>
+      <div class="helpRow">
+        <div class="helpLink" id="helpLink1">Kur to atrast rēķinā?</div>
+        <button type="button" class="helpQ" id="helpBtn1" aria-label="Palīdzība">?</button>
+      </div>
       <div class="error" id="errAbonents">Abonenta numuram jābūt 8 cipariem.</div>
     </div>
 
     <div class="field">
-      <div class="labelRow">
-        <label style="margin:0;">Līguma numurs</label>
-        <button type="button" class="infoIcon" id="helpBtn2" aria-label="Kur atrast abonenta kodu un līguma numuru?">i</button>
-      </div>
+      <label>Līguma numurs</label>
       <input id="contractNr" type="text" autocomplete="off" placeholder="Ievadi līguma numuru" />
-      <div class="hint">Ievadi abonenta kodu un līguma numuru, tad nospied <b>IEVADĪT</b>.</div>
+      <div class="helpRow">
+        <div class="helpLink" id="helpLink2">Kur to atrast rēķinā?</div>
+        <button type="button" class="helpQ" id="helpBtn2" aria-label="Palīdzība">?</button>
+      </div>
       <div class="error" id="errContract">Lūdzu ievadi līguma numuru.</div>
     </div>
 
-    <!-- tikai IEVADĪT -->
     <div class="btn-row">
       <button class="btn-secondary" id="lookupBtn" type="button">IEVADĪT</button>
     </div>
 
-    <!-- AUTO (lookup) -->
     <div id="autoSection">
       <div class="section-title">Skaitītāji</div>
       <div id="autoAddresses"></div>
     </div>
 
-    <!-- MANUAL -->
     <div id="manualSection">
       <div class="section-title">Adreses un skaitītāji</div>
       <div id="addresses"></div>
@@ -323,26 +289,26 @@
 
 <!-- Submit popup -->
 <div id="submitModal">
-  <div id="submitModalBackdrop"></div>
-  <div id="submitModalCard" role="dialog" aria-modal="true" aria-labelledby="submitModalTitle">
-    <div id="submitModalTitle">SŪTU…</div>
-    <div id="submitModalText">Lūdzu uzgaidi, notiek rādījumu nosūtīšana.</div>
-    <div id="submitModalActions">
-      <button type="button" id="submitModalCloseBtn" style="display:none;">AIZVĒRT</button>
-      <button type="button" id="submitModalRetryBtn" style="display:none;">MĒĢINĀT VĒLREIZ</button>
+  <div class="modalBackdrop" id="submitBackdrop"></div>
+  <div class="modalCard" id="submitCard" role="dialog" aria-modal="true">
+    <div class="modalTitle" id="submitTitle">SŪTU…</div>
+    <div class="modalText" id="submitText">Lūdzu uzgaidi, notiek rādījumu nosūtīšana.</div>
+    <div class="modalActions">
+      <button type="button" class="btn-outline primary" id="submitCloseBtn" style="display:none;">AIZVĒRT</button>
+      <button type="button" class="btn-outline danger" id="submitRetryBtn" style="display:none;">MĒĢINĀT VĒLREIZ</button>
     </div>
   </div>
 </div>
 
 <!-- Lookup not found modal -->
 <div id="notFoundModal">
-  <div id="notFoundBackdrop"></div>
-  <div id="notFoundCard" role="dialog" aria-modal="true" aria-labelledby="notFoundTitle">
-    <div id="notFoundTitle">Klients netika atrasts</div>
-    <div id="notFoundText">
+  <div class="modalBackdrop" id="notFoundBackdrop"></div>
+  <div class="modalCard" id="notFoundCard" role="dialog" aria-modal="true">
+    <div class="modalTitle">Klients netika atrasts</div>
+    <div class="modalText">
       Pārbaudiet abonenta kodu un līguma numuru. Ja nevarat atrast datus rēķinā, ievadiet rādījumus manuāli.
     </div>
-    <div id="notFoundActions">
+    <div class="modalActions">
       <button type="button" class="btn-outline primary" id="notFoundEditBtn">Labot</button>
       <button type="button" class="btn-outline danger" id="notFoundManualBtn">Ievadīt manuāli</button>
     </div>
@@ -351,13 +317,27 @@
 
 <!-- Help modal -->
 <div id="helpModal">
-  <div id="helpBackdrop"></div>
-  <div id="helpCard" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
-    <div id="helpTitle">Kur atrast abonenta kodu un līguma numuru?</div>
-    <div id="helpText">Abonenta kods un līguma numurs ir norādīts rēķina augšējā labajā stūrī.</div>
+  <div class="modalBackdrop" id="helpBackdrop"></div>
+  <div class="modalCard" id="helpCard" role="dialog" aria-modal="true">
+    <div class="modalTitle">Kur atrast abonenta kodu un līguma numuru?</div>
+    <div class="modalText">Abonenta kods un līguma numurs ir norādīts rēķina augšējā labajā stūrī.</div>
     <img id="helpImg" src="/assets/rekins-paraugs.png" alt="Rēķina fragments" />
-    <div id="helpActions">
+    <div class="modalActions" style="margin-top:12px;">
       <button type="button" class="btn-outline primary" id="helpCloseBtn">AIZVĒRT</button>
+    </div>
+  </div>
+</div>
+
+<!-- History modal -->
+<div id="historyModal">
+  <div class="modalBackdrop" id="histBackdrop"></div>
+  <div class="modalCard" id="histCard" role="dialog" aria-modal="true">
+    <div class="modalTitle" id="histTitle">Patēriņš pa mēnešiem (m³)</div>
+    <div id="histLoading">Ielādēju…</div>
+    <canvas id="histCanvas" width="900" height="280"></canvas>
+    <div id="histMeta"></div>
+    <div class="modalActions" style="margin-top:12px;">
+      <button type="button" class="btn-outline primary" id="histCloseBtn">AIZVĒRT</button>
     </div>
   </div>
 </div>
@@ -423,57 +403,63 @@
   }
 
   // ===== State =====
-  let MODE = "lookup"; // lookup | manual
+  let MODE = "lookup";
   let LOOKUP_LOADING = false;
   let LOOKUP_FOUND = false;
   let LOOKUP_ATTEMPTED = false;
 
-  // ===== Submit modal =====
-  let MODAL_LAST_STATE = "idle";
-  function modalShow() { $('#submitModal').style.display = 'block'; }
-  function modalHide() { $('#submitModal').style.display = 'none'; }
+  // ===== modal helpers =====
+  function showModal(id){ $(id).style.display='block'; }
+  function hideModal(id){ $(id).style.display='none'; }
 
+  // submit modal
+  let MODAL_LAST_STATE = "idle";
   function modalStateSending() {
     MODAL_LAST_STATE="sending";
-    modalShow();
-    $('#submitModalTitle').textContent='SŪTU…';
-    $('#submitModalText').textContent='Lūdzu uzgaidi, notiek rādījumu nosūtīšana.';
-    $('#submitModalCloseBtn').style.display='none';
-    $('#submitModalRetryBtn').style.display='none';
+    showModal('#submitModal');
+    $('#submitTitle').textContent='SŪTU…';
+    $('#submitText').textContent='Lūdzu uzgaidi, notiek rādījumu nosūtīšana.';
+    $('#submitCloseBtn').style.display='none';
+    $('#submitRetryBtn').style.display='none';
   }
   function modalStateSuccess() {
     MODAL_LAST_STATE="success";
-    modalShow();
-    $('#submitModalTitle').textContent='RĀDĪJUMS IESNIEGTS';
-    $('#submitModalText').textContent='Paldies! Jūsu rādījumi ir saņemti.';
-    $('#submitModalCloseBtn').style.display='inline-block';
-    $('#submitModalRetryBtn').style.display='none';
+    showModal('#submitModal');
+    $('#submitTitle').textContent='RĀDĪJUMS IESNIEGTS';
+    $('#submitText').textContent='Paldies! Jūsu rādījumi ir saņemti.';
+    $('#submitCloseBtn').style.display='inline-block';
+    $('#submitRetryBtn').style.display='none';
   }
   function modalStateError(errText) {
     MODAL_LAST_STATE="error";
-    modalShow();
-    $('#submitModalTitle').textContent='KĻŪDA';
-    $('#submitModalText').textContent=errText || 'Neizdevās nosūtīt.';
-    $('#submitModalCloseBtn').style.display='inline-block';
-    $('#submitModalRetryBtn').style.display='inline-block';
+    showModal('#submitModal');
+    $('#submitTitle').textContent='KĻŪDA';
+    $('#submitText').textContent=errText || 'Neizdevās nosūtīt.';
+    $('#submitCloseBtn').style.display='inline-block';
+    $('#submitRetryBtn').style.display='inline-block';
   }
-  $('#submitModalCloseBtn').addEventListener('click', () => { modalHide(); if (MODAL_LAST_STATE==="success") resetFormAll(); });
-  $('#submitModalRetryBtn').addEventListener('click', () => { modalHide(); refreshAll(); });
+  $('#submitBackdrop').addEventListener('click', () => { hideModal('#submitModal'); if (MODAL_LAST_STATE==="success") resetFormAll(); });
+  $('#submitCloseBtn').addEventListener('click', () => { hideModal('#submitModal'); if (MODAL_LAST_STATE==="success") resetFormAll(); });
+  $('#submitRetryBtn').addEventListener('click', () => { hideModal('#submitModal'); refreshAll(); });
 
-  // ===== Not found modal =====
-  function notFoundShow(){ $('#notFoundModal').style.display='block'; }
-  function notFoundHide(){ $('#notFoundModal').style.display='none'; }
-  $('#notFoundBackdrop').addEventListener('click', notFoundHide);
-  $('#notFoundEditBtn').addEventListener('click', () => { notFoundHide(); $('#contractNr').focus(); });
-  $('#notFoundManualBtn').addEventListener('click', () => { notFoundHide(); switchToManual(); });
+  // not found modal
+  $('#notFoundBackdrop').addEventListener('click', () => hideModal('#notFoundModal'));
+  $('#notFoundEditBtn').addEventListener('click', () => { hideModal('#notFoundModal'); $('#contractNr').focus(); });
+  $('#notFoundManualBtn').addEventListener('click', () => { hideModal('#notFoundModal'); switchToManual(); });
 
-  // ===== Help modal =====
-  function helpShow(){ $('#helpModal').style.display='block'; }
-  function helpHide(){ $('#helpModal').style.display='none'; }
-  $('#helpBtn1').addEventListener('click', helpShow);
-  $('#helpBtn2').addEventListener('click', helpShow);
-  $('#helpBackdrop').addEventListener('click', helpHide);
-  $('#helpCloseBtn').addEventListener('click', helpHide);
+  // help modal
+  function openHelp(){ showModal('#helpModal'); }
+  $('#helpBackdrop').addEventListener('click', () => hideModal('#helpModal'));
+  $('#helpCloseBtn').addEventListener('click', () => hideModal('#helpModal'));
+  $('#helpBtn1').addEventListener('click', openHelp);
+  $('#helpBtn2').addEventListener('click', openHelp);
+  $('#helpLink1').addEventListener('click', openHelp);
+  $('#helpLink2').addEventListener('click', openHelp);
+
+  // history modal (click anywhere outside card closes)
+  $('#histBackdrop').addEventListener('click', () => hideModal('#historyModal'));
+  $('#histCloseBtn').addEventListener('click', () => hideModal('#historyModal'));
+  $('#histCard').addEventListener('click', (e) => e.stopPropagation());
 
   async function refreshWindowNotice() {
     const box = $("#windowNotice");
@@ -506,13 +492,9 @@
         inp.value = inp.value.replace(/\D/g, "").slice(0,1);
         if (inp.value && i < 7) host.children[i+1].focus();
 
-        // reset pēc jebkādas izmaiņas
         if (MODE === "lookup") {
-          LOOKUP_FOUND = false;
-          LOOKUP_ATTEMPTED = false;
-          LOOKUP_LOADING = false;
-          setLookupNotice(null, "");
-          clearAuto();
+          LOOKUP_FOUND = false; LOOKUP_ATTEMPTED = false; LOOKUP_LOADING = false;
+          setLookupNotice(null, ""); clearAuto();
         }
         refreshAll();
       });
@@ -529,11 +511,8 @@
         (host.children[Math.min(digits.length,7)] || host.children[7]).focus();
 
         if (MODE === "lookup") {
-          LOOKUP_FOUND = false;
-          LOOKUP_ATTEMPTED = false;
-          LOOKUP_LOADING = false;
-          setLookupNotice(null, "");
-          clearAuto();
+          LOOKUP_FOUND = false; LOOKUP_ATTEMPTED = false; LOOKUP_LOADING = false;
+          setLookupNotice(null, ""); clearAuto();
         }
         refreshAll();
       });
@@ -549,6 +528,102 @@
   function clearAuto(){
     $("#autoAddresses").innerHTML = "";
     $("#autoSection").style.display = "none";
+  }
+
+  function drawHistoryChart(canvas, items) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0,0,w,h);
+
+    const padL=48, padR=12, padT=16, padB=36;
+    const iw = w - padL - padR;
+    const ih = h - padT - padB;
+
+    const values = items.map(x => Number(x.m3) || 0);
+    const labels = items.map(x => String(x.month || '').slice(5,7)); // MM
+    const maxV = Math.max(1, ...values);
+
+    // axis
+    ctx.strokeStyle = '#ddd';
+    ctx.beginPath();
+    ctx.moveTo(padL, padT);
+    ctx.lineTo(padL, padT+ih);
+    ctx.lineTo(padL+iw, padT+ih);
+    ctx.stroke();
+
+    const n = values.length || 1;
+    const bw = iw / n;
+
+    // bars
+    ctx.fillStyle = '#1f5f86';
+    for (let i=0;i<n;i++){
+      const v = values[i];
+      const bh = (v/maxV)*ih;
+      const x = padL + i*bw + 3;
+      const y = padT + ih - bh;
+      ctx.fillRect(x, y, Math.max(2, bw-6), bh);
+
+      // value label
+      ctx.fillStyle = '#111';
+      ctx.font = '12px system-ui';
+      const t = (Math.round(v*100)/100).toFixed(2).replace(/\.00$/,'');
+      ctx.fillText(t, x, Math.max(padT+12, y-4));
+      ctx.fillStyle = '#1f5f86';
+    }
+
+    // Y labels
+    ctx.fillStyle = '#555';
+    ctx.font = '12px system-ui';
+    ctx.fillText('0', 12, padT+ih);
+    ctx.fillText(String(maxV), 12, padT+12);
+
+    // X labels (months)
+    ctx.fillStyle = '#555';
+    ctx.font = '12px system-ui';
+    for (let i=0;i<n;i++){
+      const x = padL + i*bw + 6;
+      ctx.fillText(labels[i], x, padT+ih+20);
+    }
+  }
+
+  async function openHistory(address, contract) {
+    const subscriber = readAbonentaKods();
+    if (!CFG.abonRegex.test(subscriber) || !contract || !address) return;
+
+    $('#histTitle').textContent = `Patēriņš pa mēnešiem (m³) — ${address}`;
+    $('#histLoading').textContent = 'Ielādēju…';
+    $('#histMeta').textContent = '';
+    showModal('#historyModal');
+
+    try {
+      const res = await fetch(`/api/history?subscriber=${encodeURIComponent(subscriber)}&contract=${encodeURIComponent(contract)}&address=${encodeURIComponent(address)}`);
+      const j = await res.json().catch(()=>null);
+      if (!res.ok || !j || j.ok !== true) {
+        $('#histLoading').textContent = 'Neizdevās ielādēt vēsturi.';
+        return;
+      }
+
+      const items = Array.isArray(j.items) ? j.items : [];
+      // noteikums: trūkst/negatīvs => 0
+      const fixed = items.map(x => ({
+        month: x.month,
+        m3: (Number(x.m3) > 0 && Number.isFinite(Number(x.m3))) ? Number(x.m3) : 0
+      }));
+
+      if (!fixed.length) {
+        $('#histLoading').textContent = 'Vēsturiskie dati nav atrasti.';
+        drawHistoryChart($('#histCanvas'), Array.from({length:12}, (_,i)=>({month:'', m3:0})));
+        return;
+      }
+
+      $('#histLoading').textContent = '';
+      drawHistoryChart($('#histCanvas'), fixed);
+
+      const total = fixed.reduce((a,b)=>a+(Number(b.m3)||0),0);
+      $('#histMeta').textContent = `Pēdējie 12 mēneši • Kopā: ${total.toFixed(2).replace(/\.00$/,'')} m³`;
+    } catch {
+      $('#histLoading').textContent = 'Neizdevās ielādēt vēsturi.';
+    }
   }
 
   function renderAuto(addresses){
@@ -591,17 +666,26 @@
 
     addresses.forEach((a) => {
       const addrText = String(a.address || "").trim();
+      const meters = Array.isArray(a.meters) ? a.meters : [];
+      const contractForAddress = (meters[0] && meters[0].contract_nr) ? String(meters[0].contract_nr) : "";
 
       const block = el("div", { class:"address-block" });
 
-      // ✅ address on the LEFT, no "Adrese 1/2/3" badge
-      const head = el("div", { class:"address-head auto-head" }, [
-        el("div", { class:"auto-address-title", text: addrText })
+      const head = el("div", { class:"address-head" }, [
+        el("div", { class:"auto-address-title", text: addrText }),
+        el("div", { class:"addrActions" }, [
+          el("button", {
+            type:"button",
+            class:"histBtn",
+            onclick: () => openHistory(addrText, contractForAddress),
+            title:"Apskatīt patēriņu pa mēnešiem"
+          }, [el("span",{text:"📊"}), el("div",{text:"Vēsture"})])
+        ])
       ]);
 
       const metersHost = el("div", { class:"meters" });
 
-      (a.meters || []).forEach((m) => {
+      meters.forEach((m) => {
         const meter = String(m.meter_serial || "").trim();
         const last = (m.last_reading == null) ? "" : String(m.last_reading);
         const cNr = String(m.contract_nr || "").trim();
@@ -651,7 +735,6 @@
       host.appendChild(block);
     });
 
-    // ✅ FORCE SHOW (galvenais fix)
     $("#autoSection").style.display = "block";
   }
 
@@ -694,24 +777,15 @@
         setLookupNotice("bad", "<b>Klients netika atrasts.</b>");
         LOOKUP_FOUND = false;
         clearAuto();
-        notFoundShow();
+        showModal('#notFoundModal');
         refreshAll();
         return;
       }
 
       setLookupNotice("good", "<b>Dati atrasti.</b> Ievadi jauno rādījumu vai patēriņu visiem skaitītājiem.");
-
-      try {
-        renderAuto(j.addresses);
-        LOOKUP_FOUND = true;
-        document.getElementById("autoSection").scrollIntoView({ behavior:"smooth", block:"start" });
-      } catch (e) {
-        console.error("renderAuto failed", e, j);
-        LOOKUP_FOUND = false;
-        clearAuto();
-        setLookupNotice("bad", "<b>Kļūda attēlojot skaitītājus.</b> Ievadi manuāli.");
-        notFoundShow();
-      }
+      renderAuto(j.addresses);
+      LOOKUP_FOUND = true;
+      document.getElementById("autoSection").scrollIntoView({ behavior:"smooth", block:"start" });
 
       refreshAll();
     } catch {
@@ -730,7 +804,7 @@
     const res = await fetch(`/api/addresses?q=${encodeURIComponent(q)}&limit=${CFG.addrLimit}`);
     if (!res.ok) return [];
     const data = await res.json();
-    const arr = data.items || data.results || [];
+    const arr = data.items || [];
     return Array.isArray(arr) ? arr : [];
   }
 
@@ -780,15 +854,9 @@
     const blocks = $$(".address-block", $("#addresses"));
     blocks.forEach((block, i) => {
       const badge = $(".badge", block);
-      if (i === 0) { badge.classList.add("hidden"); }
-      else { badge.classList.remove("hidden"); badge.textContent = `Adrese ${i+1}`; }
-
-      const delBtn = $(".delete-address-btn", block);
-      if (delBtn) {
-        const hide = (i === 0);
-        delBtn.classList.toggle("hidden", hide);
-        delBtn.disabled = hide;
-      }
+      if (!badge) return;
+      badge.textContent = `Adrese ${i+1}`;
+      badge.style.display = i===0 ? "none" : "inline-flex";
     });
   }
 
@@ -834,10 +902,11 @@
     const block = el("div", { class:"address-block" });
 
     const badge = el("div", { class:"badge", text:"Adrese 1" });
+    badge.style.display = "none";
 
     const removeAddressBtn = el("button", {
       type:"button",
-      class:"delete-address-btn hidden",
+      class:"btn-secondary",
       text:"Dzēst adresi",
       onclick: () => {
         const all = $$(".address-block", $("#addresses"));
@@ -947,7 +1016,6 @@
         reasons.push("Nospied IEVADĪT, lai ielādētu skaitītājus.");
         return reasons;
       }
-
       if (LOOKUP_LOADING) reasons.push("Notiek datu meklēšana… uzgaidi.");
 
       if (LOOKUP_ATTEMPTED && CFG.abonRegex.test(abon) && contract && !LOOKUP_FOUND) {
@@ -977,7 +1045,6 @@
               reasons.push(`Skaitītājs ${idx+1}: jaunajam rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
               return;
             }
-            // if new reading is provided, consumption can be auto-calculated (even negative) and must not block submit
           } else if (hasCons) {
             if (prev == null) {
               reasons.push(`Skaitītājs ${idx+1}: nevar ievadīt patēriņu, ja nav zināms pēdējais rādījums.`);
@@ -989,9 +1056,7 @@
             }
           }
 
-          if (!ln.reading) {
-            reasons.push(`Skaitītājs ${idx+1}: ievade nav korekta.`);
-          }
+          if (!ln.reading) reasons.push(`Skaitītājs ${idx+1}: ievade nav korekta.`);
         });
       }
 
