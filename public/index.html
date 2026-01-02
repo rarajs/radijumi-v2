@@ -130,14 +130,6 @@
 
     .meters{ margin-top:10px; display:flex; flex-direction:column; gap:10px; }
 
-    .histBtn{
-      border-radius:12px; border:2px solid #cfd6de; background:#fff;
-      padding:8px 10px; cursor:pointer; font-weight:1000; color:#111;
-      display:inline-flex; align-items:center; gap:8px;
-    }
-    .histBtn:hover{ background:#eef3f8; }
-    .histBtn span{ font-size:16px; }
-
     /* manual meter row */
     .meter-row{
       display:grid;
@@ -192,15 +184,49 @@
 
     /* AUTO */
     #autoSection{ display:none; margin-top:10px; }
+
     .auto-meter-row{
       display:grid;
-      grid-template-columns: 1fr 1fr 1fr 180px;
+      grid-template-columns: 170px 170px 220px 140px 54px; /* pēdējā ikonai */
       gap:10px;
       align-items:end;
       margin-top:10px;
     }
     .auto-meter-row.neg input[data-role="cons"]{ color:var(--danger); font-weight:1000; }
-    @media (max-width:640px){ .auto-meter-row{ grid-template-columns: 1fr; } }
+
+    /* kompaktāki ievades lauki auto režīmā */
+    #autoSection input[type="text"]{ padding:10px 10px; }
+    #autoSection label{ font-size:12px; }
+
+    @media (max-width:640px){
+      .auto-meter-row{ grid-template-columns: 1fr; }
+    }
+
+    /* kvadrātaina “vēsture” ikona */
+    .histIconBtn{
+      width:44px;
+      height:44px;
+      border-radius:12px;
+      border:2px solid #cfd6de;
+      background:#fff;
+      cursor:pointer;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      padding:0;
+    }
+    .histIconBtn:hover{ background:#eef3f8; }
+    .histIconBtn img{ width:22px; height:22px; display:block; }
+
+    .historyCell{
+      display:flex;
+      flex-direction:column;
+      align-items:flex-end;
+    }
+    .historyCell label{
+      opacity:0;
+      height:16px;
+    }
 
     /* modals */
     #submitModal, #notFoundModal, #helpModal, #historyModal { position: fixed; inset: 0; z-index: 9999; display:none; }
@@ -243,13 +269,13 @@
     <div class="section-title">Abonenta informācija</div>
 
     <div class="field">
-      <label>Abonenta numurs (8 cipari)</label>
+      <label>Abonenta kods (8 cipari)</label>
       <div class="code-boxes" id="abonentaCodeBoxes"></div>
       <div class="helpRow">
         <div class="helpLink" id="helpLink1">Kur to atrast rēķinā?</div>
         <button type="button" class="helpQ" id="helpBtn1" aria-label="Palīdzība">?</button>
       </div>
-      <div class="error" id="errAbonents">Abonenta numuram jābūt 8 cipariem.</div>
+      <div class="error" id="errAbonents">Abonenta kodam jābūt 8 cipariem.</div>
     </div>
 
     <div class="field">
@@ -692,18 +718,23 @@
         ]);
 
         const consInp = el("input", { type:"text", inputmode:"decimal", placeholder:"Ievadi patēriņu", "data-role":"cons" });
+        const f4 = el("div", { class:"field" }, [
+          el("label", { text:"Patēriņš" }),
+          consInp
+        ]);
 
         const histBtn = el("button", {
           type:"button",
-          class:"histBtn",
+          class:"histIconBtn",
           onclick: () => openHistory(addrText, cNr, meter),
-          title:"Apskatīt patēriņu pa mēnešiem"
-        }, [el("span",{text:"📊"}), el("div",{text:"Vēsture"})]);
+          title:"Patēriņa vēsture"
+        }, [
+          el("img", { src:"/assets/history.png", alt:"Vēsture" })
+        ]);
 
-        const f4 = el("div", { class:"field" }, [
-          el("label", { text:"Patēriņš" }),
-          consInp,
-          el("div", { style:"margin-top:8px; display:flex; justify-content:flex-end;" }, [histBtn])
+        const f5 = el("div", { class:"field historyCell" }, [
+          el("label", { text:"." }),
+          histBtn
         ]);
 
         newInp.addEventListener("input", () => {
@@ -718,7 +749,7 @@
           refreshAll();
         });
 
-        row.append(f1, f2, f3, f4);
+        row.append(f1, f2, f3, f4, f5);
         metersHost.appendChild(row);
       });
 
@@ -969,7 +1000,7 @@
     $("#errAbonents").classList.toggle("show", !!abon && !CFG.abonRegex.test(abon));
     $("#errContract").classList.toggle("show", MODE === "lookup" && !!contract === false);
 
-    if (!CFG.abonRegex.test(abon)) reasons.push("Abonenta numuram jābūt 8 cipariem.");
+    if (!CFG.abonRegex.test(abon)) reasons.push("Abonenta kodam jābūt 8 cipariem.");
 
     if (MODE === "lookup") {
       if (!contract) reasons.push("Līguma numurs ir obligāts.");
