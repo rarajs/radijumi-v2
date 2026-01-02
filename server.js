@@ -61,6 +61,46 @@ async function ensureSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS history_monthly_meter_month_idx ON history_monthly_meter(month);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS history_monthly_meter_contract_meter_idx ON history_monthly_meter(contract_nr, meter_no);`);
+
+// contract -> email map (from history XLSX)
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS contract_email_map (
+    contract_nr text PRIMARY KEY,
+    email text,
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+`);
+
+// invite tokens (token on subscriber/month)
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS invite_tokens (
+    id bigserial PRIMARY KEY,
+    month text NOT NULL, -- YYYY-MM (Europe/Riga)
+    subscriber_code text NOT NULL,
+    token_hash text NOT NULL UNIQUE,
+    token_plain text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    expires_at timestamptz,
+    UNIQUE(month, subscriber_code)
+  );
+`);
+await pool.query(`ALTER TABLE invite_tokens ADD COLUMN IF NOT EXISTS token_plain text;`);
+await pool.query(`CREATE INDEX IF NOT EXISTS invite_tokens_month_idx ON invite_tokens(month);`);
+await pool.query(`CREATE INDEX IF NOT EXISTS invite_tokens_sub_idx ON invite_tokens(subscriber_code);`);
+
+// contract submissions per month (LOCKED) for invite flow
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS contract_submissions (
+    id bigserial PRIMARY KEY,
+    month text NOT NULL, -- YYYY-MM (Europe/Riga)
+    contract_nr text NOT NULL,
+    submission_id bigint,
+    submitted_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(month, contract_nr)
+  );
+`);
+await pool.query(`CREATE INDEX IF NOT EXISTS contract_submissions_month_idx ON contract_submissions(month);`);
+
 }
 
 /* ===================== middleware ===================== */
@@ -72,6 +112,7 @@ app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
 app.use(express.static(path.join(__dirname, 'public'), { etag: true, maxAge: '1h' }));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/i/:token', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 /* ===================== rate limiters ===================== */
 const submitLimiter = rateLimit({
@@ -182,6 +223,29 @@ function parseReading(value) {
   if (!Number.isFinite(num) || num < 0) return null;
   return s;
 }
+
+/* ===================== Invite helpers ===================== */
+function currentMonthYYYYMM() {
+  return DateTime.now().setZone(TZ).toFormat('yyyy-MM');
+}
+function newToken() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+function sha256Hex(s) {
+  return crypto.createHash('sha256').update(String(s), 'utf8').digest('hex');
+}
+function getBaseUrl(req) {
+  const proto = (req.get('x-forwarded-proto') || req.protocol || 'https').split(',')[0].trim();
+  const host = req.get('host');
+  return `${proto}://${host}`;
+}
+function isValidEmail(email) {
+  const s = String(email || '').trim();
+  if (!s) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
+
 
 /* ===================== Addresses loader from XLSX (lat/lon for dashboard) ===================== */
 const ADDR_XLSX = path.join(__dirname, 'data', 'adresesJurmala.xlsx');
@@ -561,6 +625,314 @@ app.get('/api/history', lookupLimiter, async (req, res) => {
   }
 });
 
+
+/* ===================== INVITE API ===================== */
+
+// Resolve invite link -> return addresses/meters + contract lock statuses
+app.get('/api/invite/resolve', lookupLimiter, async (req, res) => {
+  const originError = enforceSameOriginSoft(req, res);
+  if (originError) return;
+
+  if (!isWindowOpen()) {
+    return res.status(403).json({ ok:false, error:'WINDOW_CLOSED', window: getSubmissionWindow() });
+  }
+
+  const token = String(req.query.token || '').trim();
+  if (!token) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+
+  const month = currentMonthYYYYMM();
+  const tokenHash = sha256Hex(token);
+
+  const client = await pool.connect();
+  try {
+    const inv = await client.query(`
+      SELECT subscriber_code, expires_at
+      FROM invite_tokens
+      WHERE month=$1 AND token_hash=$2
+      LIMIT 1
+    `, [month, tokenHash]);
+
+    if (!inv.rowCount) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+
+    const subscriber = String(inv.rows[0].subscriber_code || '').trim();
+    if (!subscriber) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+
+    const expiresAt = inv.rows[0].expires_at;
+    if (expiresAt) {
+      const nowUtc = DateTime.utc();
+      const exp = DateTime.fromJSDate(expiresAt instanceof Date ? expiresAt : new Date(expiresAt)).toUTC();
+      if (nowUtc > exp) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+    }
+
+    const batchId = await getLatestBillingBatchId(client);
+    if (!batchId) return res.status(503).json({ ok:false, error:'Billing data not uploaded' });
+
+    const q = await client.query(`
+      SELECT contract_nr, address_raw, meter_serial, last_reading, client_name
+      FROM billing_meters_snapshot
+      WHERE batch_id=$1 AND subscriber_code=$2
+      ORDER BY contract_nr, address_raw, meter_serial
+    `, [batchId, subscriber]);
+
+    if (!q.rowCount) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+
+    const contracts = Array.from(new Set(q.rows.map(r => String(r.contract_nr || '').trim()).filter(Boolean)));
+
+    let lockedSet = new Set();
+    if (contracts.length) {
+      const s = await client.query(`
+        SELECT contract_nr
+        FROM contract_submissions
+        WHERE month=$1 AND contract_nr = ANY($2::text[])
+      `, [month, contracts]);
+      lockedSet = new Set(s.rows.map(r => String(r.contract_nr)));
+    }
+
+    const byAddr = new Map();
+    for (const r of q.rows) {
+      const addr = r.address_raw || '';
+      if (!byAddr.has(addr)) byAddr.set(addr, []);
+      const c = String(r.contract_nr || '').trim();
+      byAddr.get(addr).push({
+        meter_serial: r.meter_serial,
+        last_reading: r.last_reading,
+        contract_nr: c || null,
+        locked: c ? lockedSet.has(c) : true
+      });
+    }
+
+    const allLocked = contracts.length ? contracts.every(c => lockedSet.has(c)) : true;
+
+    res.json({
+      ok: true,
+      month,
+      subscriber_code: subscriber,
+      all_locked: allLocked,
+      addresses: Array.from(byAddr.entries()).map(([address, meters]) => ({ address, meters }))
+    });
+  } catch (e) {
+    console.error('invite resolve error', e);
+    res.status(500).json({ ok:false, error:'Internal error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Submit invite (B mode): submit only OPEN contracts; lock newly submitted contracts
+app.post('/api/invite/submit', submitLimiter, async (req, res) => {
+  const originError = enforceSameOrigin(req, res);
+  if (originError) return;
+
+  if (!isWindowOpen()) {
+    return res.status(403).json({ ok:false, error:'WINDOW_CLOSED', window: getSubmissionWindow() });
+  }
+
+  const hp = String(req.body.website || req.body.honeypot || '').trim();
+  if (hp) return res.status(400).json({ ok:false, error:'Rejected' });
+
+  const token = String(req.body.token || '').trim();
+  if (!token) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+
+  const rawLines = Array.isArray(req.body.lines) ? req.body.lines : [];
+  if (!rawLines.length || rawLines.length > 800) return res.status(400).json({ ok:false, error:'Invalid lines' });
+
+  const month = currentMonthYYYYMM();
+  const tokenHash = sha256Hex(token);
+
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+
+    // lock invite row for this month
+    const inv = await db.query(`
+      SELECT subscriber_code
+      FROM invite_tokens
+      WHERE month=$1 AND token_hash=$2
+      FOR UPDATE
+    `, [month, tokenHash]);
+
+    if (!inv.rowCount) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+    }
+
+    const subscriber = String(inv.rows[0].subscriber_code || '').trim();
+    if (!subscriber) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+    }
+
+    // validate lines
+    const cleanLines = [];
+    for (const l of rawLines) {
+      const meter_no = normalizeMeterNo(l.meter_no);
+      const contract_nr = String(l.contract_nr || '').trim();
+      const readingStr = parseReading(l.reading);
+
+      if (!meter_no || !contract_nr || readingStr == null) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({ ok:false, error:'Invalid lines' });
+      }
+      cleanLines.push({ meter_no, contract_nr, reading: readingStr });
+    }
+
+    const contractsInPayload = Array.from(new Set(cleanLines.map(x => x.contract_nr)));
+
+    // determine locked contracts among payload
+    const lockedQ = await db.query(`
+      SELECT contract_nr
+      FROM contract_submissions
+      WHERE month=$1 AND contract_nr = ANY($2::text[])
+    `, [month, contractsInPayload]);
+
+    const lockedSet = new Set(lockedQ.rows.map(r => String(r.contract_nr)));
+    const openContracts = contractsInPayload.filter(c => !lockedSet.has(c));
+    const openLines = cleanLines.filter(x => openContracts.includes(x.contract_nr));
+
+    if (!openLines.length) {
+      await db.query('ROLLBACK');
+      return res.json({ ok:true, newly_locked: [], locked_contracts: Array.from(lockedSet), all_locked: true });
+    }
+
+    const batchId = await getLatestBillingBatchId(db);
+    if (!batchId) {
+      await db.query('ROLLBACK');
+      return res.status(503).json({ ok:false, error:'Billing data not uploaded' });
+    }
+
+    const snap = await db.query(`
+      SELECT contract_nr, meter_serial, address_raw, last_reading, last_reading_date, next_verif_date,
+             period_from, period_to, meter_type, stage, notes, qty_type, client_name
+      FROM billing_meters_snapshot
+      WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr = ANY($3::text[])
+    `, [batchId, subscriber, openContracts]);
+
+    if (!snap.rowCount) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({ ok:false, error:'Invalid' });
+    }
+
+    const snapByKey = new Map();
+    for (const r of snap.rows) snapByKey.set(String(r.contract_nr) + '|' + String(r.meter_serial), r);
+
+    for (const x of openLines) {
+      const key = x.contract_nr + '|' + x.meter_no;
+      if (!snapByKey.has(key)) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({ ok:false, error:'Meter mismatch' });
+      }
+    }
+
+    const firstSnap = snap.rows[0];
+
+    const submissionIdRes = await db.query(`
+      INSERT INTO submissions (
+        client_submission_id, subscriber_code, contract_nr, billing_batch_id, client_name,
+        address, source_origin, user_agent, ip, client_meta
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+      RETURNING id
+    `, [
+      crypto.randomUUID(),
+      subscriber,
+      'INVITE',
+      batchId,
+      firstSnap.client_name || null,
+      'MULTI',
+      (req.get('origin') || req.get('referer') || null),
+      req.get('user-agent') || null,
+      getClientIp(req),
+      JSON.stringify({ invite: true })
+    ]);
+
+    const submissionId = submissionIdRes.rows[0].id;
+
+    const insertLineSql = `
+      INSERT INTO submission_lines (
+        submission_id, contract_nr, meter_no, address, meter_type, period_from, period_to,
+        next_verif_date, last_reading_date, previous_reading, reading, consumption,
+        stage, notes, qty_type
+      )
+      VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,
+        $10::numeric, $11::numeric, $12::numeric,
+        $13,$14,$15
+      )
+    `;
+
+    const newlyLocked = new Set();
+
+    for (const x of openLines) {
+      const s = snapByKey.get(x.contract_nr + '|' + x.meter_no);
+      const prev = s.last_reading == null ? null : Number(s.last_reading);
+      const cur = Number(String(x.reading));
+      const cons = (prev == null) ? null : (cur - prev);
+
+      await db.query(insertLineSql, [
+        submissionId,
+        x.contract_nr,
+        x.meter_no,
+        s.address_raw || null,
+        s.meter_type || null,
+        s.period_from || null,
+        s.period_to || null,
+        s.next_verif_date || null,
+        s.last_reading_date || null,
+        prev,
+        cur,
+        cons == null ? null : cons,
+        s.stage || 'Sagatave',
+        s.notes || null,
+        s.qty_type || null,
+      ]);
+
+      newlyLocked.add(x.contract_nr);
+    }
+
+    // lock submitted contracts for this month
+    for (const c of newlyLocked) {
+      await db.query(`
+        INSERT INTO contract_submissions (month, contract_nr, submission_id)
+        VALUES ($1,$2,$3)
+        ON CONFLICT (month, contract_nr) DO NOTHING
+      `, [month, c, submissionId]);
+    }
+
+    await db.query('COMMIT');
+
+    // compute all locked for subscriber
+    const allContractsQ = await pool.query(`
+      SELECT DISTINCT contract_nr
+      FROM billing_meters_snapshot
+      WHERE batch_id=$1 AND subscriber_code=$2
+    `, [batchId, subscriber]);
+
+    const allContracts = allContractsQ.rows.map(r => String(r.contract_nr)).filter(Boolean);
+
+    const lockedNowQ = await pool.query(`
+      SELECT contract_nr
+      FROM contract_submissions
+      WHERE month=$1 AND contract_nr = ANY($2::text[])
+    `, [month, allContracts]);
+
+    const lockedNow = new Set(lockedNowQ.rows.map(r => String(r.contract_nr)));
+    const allLocked = allContracts.length ? allContracts.every(c => lockedNow.has(c)) : true;
+
+    return res.json({
+      ok: true,
+      newly_locked: Array.from(newlyLocked),
+      locked_contracts: Array.from(lockedNow),
+      all_locked: allLocked
+    });
+  } catch (e) {
+    try { await db.query('ROLLBACK'); } catch {}
+    console.error('invite submit error', e);
+    return res.status(500).json({ ok:false, error:'Internal error' });
+  } finally {
+    db.release();
+  }
+});
+
 /* ===================== SUBMIT ===================== */
 app.post('/api/submit', submitLimiter, async (req, res) => {
   const originError = enforceSameOrigin(req, res);
@@ -875,6 +1247,7 @@ app.get('/admin', requireBasicAuth, async (req, res) => {
       <a class="btn" href="/admin/analytics">Dashboard</a>
       <a class="btn" href="/admin/exports">Iesniegtie dati</a>
     </div>
+    <div class="muted" style="margin-top:12px">Uzaicinājumi: <a href="/admin/invites">/admin/invites</a></div>
   `);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.end(html);
@@ -921,593 +1294,212 @@ app.get('/admin/analytics', requireBasicAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin-analytics.html'));
 });
 
-app.get('/admin/exports', requireBasicAuth, async (req, res) => {
-  const months = await listAvailableMonths();
-  const optionsHtml = months.length
-    ? months.map((m, i) => `<option value="${m}" ${i === 0 ? 'selected' : ''}>${m}</option>`).join('')
-    : `<option value="" disabled selected>Nav datu</option>`;
 
-  const html = pageShell('Exports', `
-    <h1>Iesniegtie dati</h1>
+/* ===================== Admin: invites (token links) ===================== */
+app.get('/admin/invites', requireBasicAuth, async (req, res) => {
+  const month = currentMonthYYYYMM();
+  const baseUrl = getBaseUrl(req);
 
-    <form method="GET" action="/admin/export.xlsx">
-      <label>XLSX eksports (pēc veidnes)</label>
-      <select name="month" ${months.length ? '' : 'disabled'}>${optionsHtml}</select>
-      <button class="btn ok" type="submit" ${months.length ? '' : 'disabled'} style="margin-top:12px">Lejupielādēt export.xlsx</button>
-    </form>
+  const client = await pool.connect();
+  try {
+    const c = await client.query(`SELECT count(*)::int AS n FROM invite_tokens WHERE month=$1`, [month]);
+    const n = c.rows[0]?.n || 0;
 
-    <form method="GET" action="/admin/export.csv" style="margin-top:12px">
-      <label>CSV (debug)</label>
-      <select name="month" ${months.length ? '' : 'disabled'}>${optionsHtml}</select>
-      <button class="btn" type="submit" ${months.length ? '' : 'disabled'} style="margin-top:12px">Lejupielādēt export.csv</button>
-    </form>
+    const html = pageShell('Invites', `
+      <h1>Uzaicinājumi (mēnesis: ${month})</h1>
+      <div class="muted">Linku formāts: <b>${baseUrl}/i/&lt;token&gt;</b></div>
+      <div class="muted">Tokeni šim mēnesim DB: <b>${n}</b></div>
 
-    <div class="danger">
-      <h3>Dzēst visus iesniegumus</h3>
-      <div class="muted">Ieraksti <b>DELETE</b>, lai apstiprinātu.</div>
-      <form method="POST" action="/admin/clear" style="margin-top:10px">
-        <input name="confirm" autocomplete="off" />
-        <button class="btn" type="submit" style="margin-top:10px">Dzēst visu</button>
+      <form method="POST" action="/admin/invites/generate" style="margin-top:12px">
+        <button class="btn ok" type="submit">Ģenerēt uzaicinājumus šim mēnesim</button>
       </form>
-    </div>
 
-    <div class="muted" style="margin-top:10px"><a href="/admin">← atpakaļ</a></div>
-  `);
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.end(html);
-});
+      <div class="grid" style="margin-top:12px">
+        <a class="btn" href="/admin/invites/export.csv">Lejupielādēt CSV (email, link)</a>
+        <a class="btn" href="/admin/invites/missing.csv">Lejupielādēt trūkstošos e-pastus</a>
+      </div>
 
-/* Admin SSE */
-app.get('/admin/events', requireBasicAuth, (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+      <div class="muted" style="margin-top:10px"><a href="/admin">← atpakaļ</a></div>
+    `);
 
-  sseClients.add(res);
-  sseSend(res, 'hello', { ok:true, ts: new Date().toISOString() });
-
-  req.on('close', () => {
-    sseClients.delete(res);
-  });
-});
-
-/* Admin analytics APIs */
-app.get('/admin/api/latest', requireBasicAuth, async (req, res) => {
-  const month = String(req.query.month || '').trim(); // YYYY-MM
-  const limit = Math.min(parseInt(req.query.limit || '10', 10) || 10, 50);
-  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ ok:false, error:'Invalid month' });
-
-  const client = await pool.connect();
-  try {
-    const q = await client.query(`
-      SELECT
-        s.id,
-        s.submitted_at,
-        s.address,
-        coalesce(sum(l.consumption), 0)::numeric(12,2) AS consumption_sum
-      FROM submissions s
-      JOIN submission_lines l ON l.submission_id = s.id
-      WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
-      GROUP BY s.id, s.submitted_at, s.address
-      ORDER BY s.submitted_at DESC
-      LIMIT $3
-    `, [TZ, month, limit]);
-
-    res.json({ ok:true, rows: q.rows });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(html);
   } catch (e) {
-    console.error('latest api error', e);
-    res.status(500).json({ ok:false, error:'Internal error' });
+    console.error('admin invites page error', e);
+    res.status(500).send('Error');
   } finally {
     client.release();
   }
 });
 
-app.get('/admin/api/by_hour', requireBasicAuth, async (req, res) => {
-  const month = String(req.query.month || '').trim();
-  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ ok:false, error:'Invalid month' });
+app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
+  const month = currentMonthYYYYMM();
+  const now = DateTime.now().setZone(TZ);
+  const expiresAt = now.endOf('month').toUTC().toISO(); // timestamptz
 
   const client = await pool.connect();
   try {
-    const q = await client.query(`
-      SELECT
-        to_char(date_trunc('hour', submitted_at AT TIME ZONE $1), 'YYYY-MM-DD HH24:00') AS hour,
-        count(*)::int AS cnt
-      FROM submissions
-      WHERE to_char(date_trunc('month', submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
-      GROUP BY 1
-      ORDER BY 1
-    `, [TZ, month]);
+    const batchId = await getLatestBillingBatchId(client);
+    if (!batchId) return res.status(503).send('Billing snapshot nav ielādēts.');
 
-    res.json({ ok:true, rows: q.rows });
-  } catch (e) {
-    console.error('by_hour api error', e);
-    res.status(500).json({ ok:false, error:'Internal error' });
-  } finally {
-    client.release();
-  }
-});
+    const subs = await client.query(`
+      SELECT DISTINCT subscriber_code
+      FROM billing_meters_snapshot
+      WHERE batch_id = $1 AND subscriber_code IS NOT NULL
+    `, [batchId]);
 
-app.get('/admin/api/map_points', requireBasicAuth, async (req, res) => {
-  const month = String(req.query.month || '').trim();
-  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ ok:false, error:'Invalid month' });
-
-  const client = await pool.connect();
-  try {
-    const q = await client.query(`
-      SELECT DISTINCT l.address
-      FROM submissions s
-      JOIN submission_lines l ON l.submission_id = s.id
-      WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
-        AND l.address IS NOT NULL
-    `, [TZ, month]);
-
-    const pts = [];
-    for (const r of q.rows) {
-      const g = geoForAddress(r.address);
-      if (!g) continue;
-      pts.push({ address: r.address, lat: g.lat, lon: g.lon });
-    }
-
-    res.json({ ok:true, points: pts });
-  } catch (e) {
-    console.error('map_points api error', e);
-    res.status(500).json({ ok:false, error:'Internal error' });
-  } finally {
-    client.release();
-  }
-});
-
-/* Admin: clear */
-app.post('/admin/clear', requireBasicAuth, async (req, res) => {
-  const confirm = String(req.body.confirm || '').trim();
-  if (confirm !== 'DELETE') return res.status(400).send('Nepareizs apstiprinājums. Ieraksti DELETE.');
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('TRUNCATE TABLE submission_lines, submissions RESTART IDENTITY CASCADE;');
-    await client.query('COMMIT');
-    return res.redirect('/admin/exports');
-  } catch (e) {
-    try { await client.query('ROLLBACK'); } catch {}
-    console.error('admin clear error', e);
-    return res.status(500).send('Dzēšana neizdevās.');
-  } finally {
-    client.release();
-  }
-});
-
-/* ===================== Admin: billing XLSX upload ===================== */
-app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).send('No file');
-  const filename = req.file.originalname || 'billing.xlsx';
-
-  const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
-
-  const headerRowIndex = rows.findIndex(r => Array.isArray(r) && r.includes('Klienta kods') && r.includes('Līg. Nr.'));
-  if (headerRowIndex === -1) return res.status(400).send('Header not found');
-
-  const header = rows[headerRowIndex].map(x => String(x ?? '').trim());
-  const col = (name) => header.indexOf(name);
-
-  const idx = {
-    meter_type: col('Skait. veids'),
-    contract: col('Līg. Nr.'),
-    client: col('Klients'),
-    subscriber: col('Klienta kods'),
-    address: col('NĪO adrese'),
-    p_from: col('Periods no'),
-    p_to: col('Periods līdz'),
-    meter: col('Skait. eks. Nr'),
-    next_verif: col('Nāk. verifikācijas datums'),
-    last_date: col('Pēdējā rādījuma datums'),
-    last_val: col('Pēdējais rādījums'),
-    stage: col('Stadija'),
-    notes: col('Piezīmes'),
-    qty_type: col('Daudzuma tips'),
-  };
-
-  if (idx.contract < 0 || idx.subscriber < 0 || idx.meter < 0) {
-    return res.status(400).send('Missing required columns');
-  }
-
-  const dataRows = rows.slice(headerRowIndex + 1);
-
-  const client = await pool.connect();
-  try {
     await client.query('BEGIN');
 
-    const b = await client.query(
-      `INSERT INTO billing_import_batches (source_filename) VALUES ($1) RETURNING id`,
-      [filename]
-    );
-    const batchId = b.rows[0].id;
+    let created = 0;
+    let already = 0;
 
-    const sql = `
-      INSERT INTO billing_meters_snapshot (
-        batch_id,
-        meter_type,
-        contract_nr,
-        client_name,
-        subscriber_code,
-        address_raw,
-        period_from,
-        period_to,
-        meter_serial,
-        next_verif_date,
-        last_reading_date,
-        last_reading,
-        stage,
-        notes,
-        qty_type
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-      ON CONFLICT ON CONSTRAINT uq_billing_row DO NOTHING
-    `;
+    for (const r of subs.rows) {
+      const subscriber = String(r.subscriber_code || '').trim();
+      if (!subscriber) continue;
 
-    for (const r of dataRows) {
-      if (!Array.isArray(r) || r.length === 0) continue;
+      const token = newToken();
+      const tokenHash = sha256Hex(token);
 
-      const subscriber = String(r[idx.subscriber] ?? '').trim();
-      const contract = String(r[idx.contract] ?? '').trim();
-      const meter = String(r[idx.meter] ?? '').trim();
-      if (!subscriber || !contract || !meter) continue;
+      const ins = await client.query(`
+        INSERT INTO invite_tokens (month, subscriber_code, token_hash, token_plain, expires_at)
+        VALUES ($1,$2,$3,$4,$5)
+        ON CONFLICT (month, subscriber_code) DO NOTHING
+      `, [month, subscriber, tokenHash, token, expiresAt]);
 
-      const lastRaw = r[idx.last_val];
-      const lastNum = (lastRaw == null || lastRaw === '') ? null : Number(lastRaw);
-
-      await client.query(sql, [
-        batchId,
-        idx.meter_type >= 0 ? (String(r[idx.meter_type] ?? '').trim() || null) : null,
-        contract,
-        idx.client >= 0 ? (String(r[idx.client] ?? '').trim() || null) : null,
-        subscriber,
-        idx.address >= 0 ? (String(r[idx.address] ?? '').trim() || null) : null,
-        idx.p_from >= 0 ? excelDateToISO(r[idx.p_from]) : null,
-        idx.p_to >= 0 ? excelDateToISO(r[idx.p_to]) : null,
-        meter,
-        idx.next_verif >= 0 ? excelDateToISO(r[idx.next_verif]) : null,
-        idx.last_date >= 0 ? excelDateToISO(r[idx.last_date]) : null,
-        Number.isFinite(lastNum) ? lastNum : null,
-        idx.stage >= 0 ? (String(r[idx.stage] ?? '').trim() || null) : null,
-        idx.notes >= 0 ? (String(r[idx.notes] ?? '').trim() || null) : null,
-        idx.qty_type >= 0 ? (String(r[idx.qty_type] ?? '').trim() || null) : null
-      ]);
-    }
-
-    await client.query('COMMIT');
-    return res.redirect('/admin/billing');
-  } catch (e) {
-    try { await client.query('ROLLBACK'); } catch {}
-    console.error('billing upload error', e);
-    res.status(500).send('Upload failed');
-  } finally {
-    client.release();
-  }
-});
-
-/* ===================== Admin: history XLSX upload (per meter) ===================== */
-function findHeaderRow(rows, wantedNames) {
-  for (let i=0; i<Math.min(rows.length, 80); i++) {
-    const r = rows[i];
-    if (!Array.isArray(r)) continue;
-    const cells = r.map(x => String(x ?? '').trim().replace(/\r/g, '')).filter(Boolean);
-    let hit = 0;
-    for (const w of wantedNames) if (cells.includes(w)) hit++;
-    if (hit >= 3) return i;
-  }
-  return -1;
-}
-
-app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).send('No file');
-
-  const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-  const ws = wb.Sheets[wb.SheetNames[0]]; // Sheet1
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
-
-  const WANT = ['NĪPLigPap.NĪPLīg.Numurs', 'SkaE.Numurs', 'Periods līdz', 'Daudzums iev.'];
-  const headerRowIndex = findHeaderRow(rows, WANT);
-  if (headerRowIndex === -1) return res.status(400).send('History header not found (need contract/meter/period/consumption columns).');
-
-  const header = rows[headerRowIndex].map(x => String(x ?? '').trim().replace(/\r/g, ''));
-  const col = (name) => header.indexOf(name);
-
-  const iContract = col('NĪPLigPap.NĪPLīg.Numurs');
-  const iMeter = col('SkaE.Numurs');
-  const iPeriodTo = col('Periods līdz');
-  const iQty = col('Daudzums iev.');
-
-  if (iContract < 0 || iMeter < 0 || iPeriodTo < 0 || iQty < 0) {
-    return res.status(400).send('Missing required history columns.');
-  }
-
-  const dataRows = rows.slice(headerRowIndex + 1);
-
-  // aggregate: contract|meter|month -> m3
-  const agg = new Map();
-
-  for (const r of dataRows) {
-    if (!Array.isArray(r) || !r.length) continue;
-
-    const contract = String(r[iContract] ?? '').trim();
-    const meterNo = String(r[iMeter] ?? '').trim();
-    const periodToIso = excelDateToISO(r[iPeriodTo]);
-    const month = isoToMonth(periodToIso);
-
-    if (!contract || !meterNo || !month) continue;
-
-    const qtyRaw = r[iQty];
-    let m3 = (qtyRaw == null || qtyRaw === '') ? 0 : Number(qtyRaw);
-    if (!Number.isFinite(m3) || m3 < 0) m3 = 0;
-
-    const key = contract + '|' + meterNo + '|' + month;
-    agg.set(key, (agg.get(key) || 0) + m3);
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const up = `
-      INSERT INTO history_monthly_meter (contract_nr, meter_no, month, m3, updated_at)
-      VALUES ($1,$2,$3,$4::numeric, now())
-      ON CONFLICT (contract_nr, meter_no, month)
-      DO UPDATE SET m3 = EXCLUDED.m3, updated_at = now()
-    `;
-
-    let count = 0;
-    for (const [key, sum] of agg.entries()) {
-      const [contract, meterNo, month] = key.split('|');
-      const v = Number.isFinite(sum) && sum > 0 ? sum : 0;
-      await client.query(up, [contract, meterNo, month, v.toFixed(2)]);
-      count++;
+      if (ins.rowCount) created++;
+      else already++;
     }
 
     await client.query('COMMIT');
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(pageShell('History OK', `
-      <h1>OK — vēsture ielādēta</h1>
-      <div class="muted">Importētas/atjaunotas rindas: <b>${count}</b></div>
-      <div class="muted" style="margin-top:10px"><a href="/admin/history">← atpakaļ</a></div>
+    res.end(pageShell('Invites OK', `
+      <h1>OK — uzaicinājumi sagatavoti</h1>
+      <div class="muted">Mēnesis: <b>${month}</b></div>
+      <div class="muted">Jauni: <b>${created}</b></div>
+      <div class="muted">Jau bija: <b>${already}</b></div>
+      <div class="muted" style="margin-top:10px"><a href="/admin/invites">← atpakaļ</a></div>
     `));
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch {}
-    console.error('history upload error', e);
-    res.status(500).send('History upload failed');
+    console.error('invites generate error', e);
+    res.status(500).send('Generate failed');
   } finally {
     client.release();
   }
 });
 
-/* ===================== Exports CSV/XLSX ===================== */
-async function exportCsv(res, req) {
-  const month = String(req?.query?.month || '').trim();
+app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
+  const month = currentMonthYYYYMM();
+  const baseUrl = getBaseUrl(req);
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename="export.csv"');
-
-  res.write(toCSVRow([
-    'submission_id','client_submission_id','subscriber_code','contract_nr','address',
-    'submitted_at_utc','meter_no','previous_reading','reading','consumption'
-  ]));
+  res.setHeader('Content-Disposition', `attachment; filename="invites_${month}.csv"`);
+  res.write(toCSVRow(['email','link']));
 
   const client = await pool.connect();
   try {
-    let sql = `
-      SELECT
-        s.id AS submission_id,
-        s.client_submission_id,
-        s.subscriber_code,
-        COALESCE(l.contract_nr, s.contract_nr) AS contract_nr,
-        s.address,
-        (s.submitted_at AT TIME ZONE 'UTC') AS submitted_at_utc,
-        l.meter_no,
-        l.previous_reading,
-        l.reading,
-        l.consumption
-      FROM submissions s
-      JOIN submission_lines l ON l.submission_id = s.id
-    `;
+    const batchId = await getLatestBillingBatchId(client);
+    if (!batchId) { res.end(); return; }
 
-    const params = [];
-    if (/^\d{4}-\d{2}$/.test(month)) {
-      sql += ` WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2`;
-      params.push(TZ, month);
+    const q = await client.query(`
+      SELECT DISTINCT
+        i.subscriber_code,
+        i.token_plain,
+        b.contract_nr,
+        cem.email
+      FROM invite_tokens i
+      JOIN billing_meters_snapshot b
+        ON b.batch_id = $1 AND b.subscriber_code = i.subscriber_code
+      LEFT JOIN contract_email_map cem
+        ON cem.contract_nr = b.contract_nr
+      WHERE i.month = $2
+      ORDER BY i.subscriber_code, b.contract_nr
+    `, [batchId, month]);
+
+    // subscriber -> {token, emails:Set}
+    const map = new Map();
+
+    for (const r of q.rows) {
+      const sub = String(r.subscriber_code || '').trim();
+      const token = String(r.token_plain || '').trim();
+      const email = String(r.email || '').trim();
+
+      if (!map.has(sub)) map.set(sub, { token, emails: new Set() });
+      const rec = map.get(sub);
+      if (!rec.token && token) rec.token = token;
+      if (isValidEmail(email)) rec.emails.add(email);
     }
 
-    sql += ` ORDER BY s.submitted_at DESC, s.id DESC, l.id ASC`;
+    for (const [sub, rec] of map.entries()) {
+      if (!rec.token) continue; // cannot export without token_plain
+      const link = `${baseUrl}/i/${rec.token}`;
 
-    const result = await client.query(sql, params);
-    for (const r of result.rows) {
-      res.write(toCSVRow([
-        r.submission_id,
-        r.client_submission_id,
-        r.subscriber_code,
-        r.contract_nr || '',
-        r.address || '',
-        r.submitted_at_utc instanceof Date ? r.submitted_at_utc.toISOString() : String(r.submitted_at_utc),
-        r.meter_no,
-        r.previous_reading == null ? '' : r.previous_reading,
-        r.reading,
-        r.consumption == null ? '' : r.consumption
-      ]));
+      for (const em of rec.emails) {
+        res.write(toCSVRow([em, link]));
+      }
     }
+
     res.end();
-  } catch (err) {
-    console.error('export error', err);
-    if (!res.headersSent) res.status(500);
+  } catch (e) {
+    console.error('invites export error', e);
+    res.status(500);
     res.end('Export failed');
   } finally {
     client.release();
   }
-}
-
-app.get('/admin/export.csv', requireBasicAuth, async (req, res) => {
-  await exportCsv(res, req);
 });
 
-const TEMPLATE_PATH = path.join(__dirname, 'data', 'billing_template.xlsx');
+app.get('/admin/invites/missing.csv', requireBasicAuth, async (req, res) => {
+  const month = currentMonthYYYYMM();
 
-function toExcelDate(v) {
-  if (!v) return null;
-  if (v instanceof Date) return v;
-  const s = String(v).slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
-  return new Date(s + 'T00:00:00Z');
-}
-function findHeaderMap(ws, headersWanted) {
-  for (let r = 1; r <= 15; r++) {
-    const row = ws.getRow(r);
-    const map = new Map();
-    let hit = 0;
-
-    for (let c = 1; c <= row.cellCount; c++) {
-      const v = row.getCell(c).value;
-      const s = (v && typeof v === 'object' && v.richText)
-        ? v.richText.map(x => x.text).join('')
-        : (v == null ? '' : String(v));
-      const t = s.trim();
-      if (!t) continue;
-      if (headersWanted.includes(t)) { map.set(t, c); hit++; }
-    }
-
-    if (hit >= Math.min(5, headersWanted.length)) return { headerRow: r, map };
-  }
-  return null;
-}
-
-app.get('/admin/export.xlsx', requireBasicAuth, async (req, res) => {
-  const month = String(req?.query?.month || '').trim();
-
-  if (!fs.existsSync(TEMPLATE_PATH)) return res.status(500).send('Template missing: data/billing_template.xlsx');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="invites_missing_${month}.csv"`);
+  res.write(toCSVRow(['subscriber_code','contract_nr','reason']));
 
   const client = await pool.connect();
   try {
-    let sql = `
-      SELECT
-        COALESCE(l.contract_nr, s.contract_nr) AS contract_nr,
-        s.client_name,
-        s.subscriber_code,
-        l.address,
-        l.period_from,
-        l.period_to,
-        l.meter_no,
-        l.next_verif_date,
-        l.last_reading_date,
-        l.previous_reading,
-        l.consumption,
-        l.reading,
-        COALESCE(l.stage,'Sagatave') AS stage,
-        l.notes,
-        l.qty_type,
-        l.meter_type
-      FROM submissions s
-      JOIN submission_lines l ON l.submission_id = s.id
-    `;
+    const batchId = await getLatestBillingBatchId(client);
+    if (!batchId) { res.end(); return; }
 
-    const params = [];
-    if (/^\d{4}-\d{2}$/.test(month)) {
-      sql += ` WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2`;
-      params.push(TZ, month);
-    }
-    sql += ` ORDER BY s.submitted_at DESC, s.id DESC, l.id ASC`;
+    const q = await client.query(`
+      SELECT DISTINCT
+        i.subscriber_code,
+        i.token_plain,
+        b.contract_nr,
+        cem.email
+      FROM invite_tokens i
+      JOIN billing_meters_snapshot b
+        ON b.batch_id = $1 AND b.subscriber_code = i.subscriber_code
+      LEFT JOIN contract_email_map cem
+        ON cem.contract_nr = b.contract_nr
+      WHERE i.month = $2
+      ORDER BY i.subscriber_code, b.contract_nr
+    `, [batchId, month]);
 
-    const data = await client.query(sql, params);
+    for (const r of q.rows) {
+      const sub = String(r.subscriber_code || '').trim();
+      const token = String(r.token_plain || '').trim();
+      const contract = String(r.contract_nr || '').trim();
+      const email = String(r.email || '').trim();
 
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.readFile(TEMPLATE_PATH);
-    const ws = wb.worksheets[0];
-
-    const headersWanted = [
-      'Skait. veids','Līg. Nr.','Klients','Klienta kods','NĪO adrese',
-      'Periods no','Periods līdz','Skait. eks. Nr',
-      'Nāk. verifikācijas datums','Pēdējā rādījuma datums',
-      'Pēdējais rādījums','Daudzums iev.','Rādījums',
-      'Stadija','Piezīmes','Daudzuma tips'
-    ];
-
-    const headerInfo = findHeaderMap(ws, headersWanted);
-    if (!headerInfo) return res.status(500).send('Template headers not found.');
-
-    const headerRow = headerInfo.headerRow;
-    const map = headerInfo.map;
-    const startRow = headerRow + 1;
-
-    const maxClear = Math.max(ws.rowCount, startRow + 1500);
-    for (let i = startRow; i <= maxClear; i++) {
-      const row = ws.getRow(i);
-      for (const h of headersWanted) {
-        const col = map.get(h);
-        if (col) row.getCell(col).value = null;
+      if (!token) {
+        res.write(toCSVRow([sub, contract, 'NO_TOKEN']));
+        continue;
       }
-      row.commit();
+      if (!isValidEmail(email)) {
+        res.write(toCSVRow([sub, contract, 'NO_EMAIL']));
+      }
     }
 
-    let rowIdx = startRow;
-    for (const x of data.rows) {
-      const row = ws.getRow(rowIdx);
-
-      const set = (h, v) => {
-        const col = map.get(h);
-        if (!col) return;
-        row.getCell(col).value = v;
-      };
-
-      set('Skait. veids', x.meter_type || null);
-      set('Līg. Nr.', x.contract_nr || null);
-      set('Klients', x.client_name || null);
-      set('Klienta kods', x.subscriber_code || null);
-      set('NĪO adrese', x.address || null);
-
-      set('Periods no', toExcelDate(x.period_from));
-      set('Periods līdz', toExcelDate(x.period_to));
-      set('Skait. eks. Nr', x.meter_no || null);
-
-      set('Nāk. verifikācijas datums', toExcelDate(x.next_verif_date));
-      set('Pēdējā rādījuma datums', toExcelDate(x.last_reading_date));
-
-      set('Pēdējais rādījums', x.previous_reading == null ? null : Number(x.previous_reading));
-      set('Daudzums iev.', x.consumption == null ? null : Number(x.consumption));
-      set('Rādījums', x.reading == null ? null : Number(x.reading));
-
-      set('Stadija', x.stage || 'Sagatave');
-      set('Piezīmes', x.notes || null);
-      set('Daudzuma tips', x.qty_type || null);
-
-      row.commit();
-      rowIdx++;
-    }
-
-    const fname = month && /^\d{4}-\d{2}$/.test(month) ? `export_${month}.xlsx` : `export.xlsx`;
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
-
-    const buf = await wb.xlsx.writeBuffer();
-    res.end(Buffer.from(buf));
+    res.end();
   } catch (e) {
-    console.error('export.xlsx error', e);
-    if (!res.headersSent) res.status(500);
-    res.end('Export XLSX failed');
+    console.error('invites missing export error', e);
+    res.status(500);
+    res.end('Export failed');
   } finally {
     client.release();
   }
 });
 
-/* ===================== start ===================== */
-(async () => {
-  try {
-    await ensureSchema();
-    await startPgListener();
-    app.listen(PORT, () => {
-      console.log(`server listening on :${PORT} (enforceWindow=${ENFORCE_WINDOW}, tz=${TZ})`);
-    });
-  } catch (e) {
-    console.error('FATAL: failed to start', e);
-    process.exit(1);
-  }
-})();
+
