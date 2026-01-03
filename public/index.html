@@ -1265,18 +1265,27 @@ const f5 = el("div", { class:"field historyCell" }, [
   }
 
   // ===== INVITE helpers =====
-  function detectInviteTokenFromPath(){
+  function detectInviteTokenFromPath() {
   const m = window.location.pathname.match(/^\/i\/([A-Za-z0-9_-]{20,})\/?$/);
-  return m ? m[1] : "";
+  const tok = m ? m[1] : "";
+  console.log("PATH=", window.location.pathname, "TOKEN=", tok);
+  return tok;
 }
 
 
+
   function hideLookupUIForInvite(){
-    $("#abonField").style.display = "none";
-    $("#contractField").style.display = "none";
-    $("#lookupRow").style.display = "none";
-    $("#subscriberTitle").style.display = "none";
-  }
+  const abonField = document.getElementById("abonField");
+  const contractField = document.getElementById("contractField");
+  const lookupRow = document.getElementById("lookupRow");
+  const title = document.getElementById("subscriberTitle");
+
+  if (abonField) abonField.style.display = "none";
+  if (contractField) contractField.style.display = "none";
+  if (lookupRow) lookupRow.style.display = "none";
+  if (title) title.style.display = "none";
+}
+
 
   function lockMetersInUI(meters){
     const set = new Set((meters || []).map(x => `${x.contract_nr}|${x.meter_no}`));
@@ -1344,7 +1353,8 @@ const f5 = el("div", { class:"field historyCell" }, [
   }
 
   async function enterInviteMode(token){
-    INVITE_MODE = true;
+    console.log("INVITE MODE ON, token=", token);
+	INVITE_MODE = true;
     INVITE_TOKEN = token;
 
     MODE = "lookup";
