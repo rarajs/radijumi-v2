@@ -433,6 +433,17 @@
   let LOOKUP_FOUND = false;
   let LOOKUP_ATTEMPTED = false;
 
+  // UX flags: show field errors only after user interaction or lookup attempt
+  let CONTRACT_TOUCHED = false;
+  let ABON_TOUCHED = false;
+
+  // Invite mode
+  let INVITE_MODE = false;
+  let INVITE_TOKEN = '';
+  let INVITE_SUBSCRIBER = '';
+  let INVITE_ALL_LOCKED = false;
+
+
   function setSubmitVisible(isVisible){
     const btn = $("#submitBtn");
     btn.style.display = isVisible ? "block" : "none";
@@ -472,8 +483,8 @@
     $('#submitCloseBtn').style.display='inline-block';
     $('#submitRetryBtn').style.display='inline-block';
   }
-  $('#submitBackdrop').addEventListener('click', () => { hideModal('#submitModal'); if (MODAL_LAST_STATE==="success") resetFormAll(); });
-  $('#submitCloseBtn').addEventListener('click', () => { hideModal('#submitModal'); if (MODAL_LAST_STATE==="success") resetFormAll(); });
+  $('#submitBackdrop').addEventListener('click', () => { hideModal('#submitModal'); if (MODAL_LAST_STATE==="success" && !INVITE_MODE) resetFormAll(); });
+  $('#submitCloseBtn').addEventListener('click', () => { hideModal('#submitModal'); if (MODAL_LAST_STATE==="success" && !INVITE_MODE) resetFormAll(); });
   $('#submitRetryBtn').addEventListener('click', () => { hideModal('#submitModal'); refreshAll(); });
 
   // not found modal
@@ -523,6 +534,7 @@
       const inp = el("input", { type:"text", inputmode:"numeric", maxlength:"1", "aria-label":`Cipars ${i+1}` });
 
       inp.addEventListener("input", () => {
+        ABON_TOUCHED = true;
         inp.value = inp.value.replace(/\D/g, "").slice(0,1);
         if (inp.value && i < 7) host.children[i+1].focus();
 
@@ -538,6 +550,7 @@
       });
 
       inp.addEventListener("paste", (e) => {
+        ABON_TOUCHED = true;
         e.preventDefault();
         const text = (e.clipboardData || window.clipboardData).getData("text");
         const digits = (text || "").replace(/\D/g, "").slice(0,8);
@@ -780,6 +793,15 @@
     const abon = readAbonentaKods();
     const contract = readContractNr();
 
+    if (INVITE_MODE) {
+      if (LOOKUP_LOADING) return ["Notiek ielāde… uzgaidi."];
+      if (!LOOKUP_FOUND) return ["Neizdevās ielādēt datus. Pamēģini atvērt linku vēlreiz."];
+      if (INVITE_ALL_LOCKED) return ["Viss iesniegts šim mēnesim."];
+      const built = buildInvitePayload();
+      if (!built.ok) return [built.error];
+      return [];
+    }
+
     LOOKUP_FOUND = false;
     clearAuto();
     setSubmitVisible(false);
@@ -1014,8 +1036,11 @@
     const abon = readAbonentaKods();
     const contract = readContractNr();
 
-    $("#errAbonents").classList.toggle("show", !!abon && !CFG.abonRegex.test(abon));
-    $("#errContract").classList.toggle("show", MODE === "lookup" && !!contract === false);
+    const showAbonErr = (ABON_TOUCHED || LOOKUP_ATTEMPTED) && !!abon && !CFG.abonRegex.test(abon);
+    const showContractErr = (CONTRACT_TOUCHED || LOOKUP_ATTEMPTED) && MODE === "lookup" && !contract;
+
+    $("#errAbonents").classList.toggle("show", showAbonErr);
+    $("#errContract").classList.toggle("show", showContractErr);
 
     if (!CFG.abonRegex.test(abon)) reasons.push("Abonenta kodam jābūt 8 cipariem.");
 
@@ -1223,13 +1248,189 @@
     refreshAll();
   }
 
-  function init(){
+  // ===== INVITE helpers =====
+  function detectInviteTokenFromPath(){
+    const m = window.location.pathname.match(/^\/i\/([A-Za-z0-9_-]{20,})$/);
+    return m ? m[1] : "";
+  }
+
+  function hideLookupUIForInvite(){
+    $("#abonField").style.display = "none";
+    $("#contractField").style.display = "none";
+    $("#lookupRow").style.display = "none";
+    $("#subscriberTitle").style.display = "none";
+  }
+
+  function lockMetersInUI(meters){
+    const set = new Set((meters || []).map(x => `${x.contract_nr}|${x.meter_no}`));
+    const rows = $$(".auto-meter-row", $("#autoAddresses"));
+    for (const r of rows) {
+      const c = r.getAttribute("data-contract") || "";
+      const m = r.getAttribute("data-meter") || "";
+      if (!set.has(`${c}|${m}`)) continue;
+
+      r.setAttribute("data-locked", "1");
+      const newEl = $("input[data-role='new']", r);
+      const consEl = $("input[data-role='cons']", r);
+      if (newEl) { newEl.disabled = true; newEl.placeholder = "Jau iesniegts"; newEl.value = ""; }
+      if (consEl) { consEl.disabled = true; consEl.placeholder = "Jau iesniegts"; consEl.value = ""; }
+      r.classList.remove("neg");
+    }
+  }
+
+  function buildInvitePayload(){
+    const rows = $$(".auto-meter-row", $("#autoAddresses"));
+    const lines = [];
+
+    function calcReadingForRow(r){
+      const prev = parseReading($("input[data-role='last']", r)?.value);
+      const newNorm = normalizeReadingInput($("input[data-role='new']", r)?.value || "");
+      const consNorm = normalizeReadingInput($("input[data-role='cons']", r)?.value || "");
+
+      const hasNew = !!newNorm;
+      const hasCons = !!consNorm;
+
+      if (!hasNew && !hasCons) return { hasAny:false, ok:true, reading:"" };
+
+      if (hasNew) {
+        if (!CFG.readingRegex.test(newNorm)) return { hasAny:true, ok:false, reading:"" };
+        return { hasAny:true, ok:true, reading:newNorm };
+      }
+
+      if (prev == null) return { hasAny:true, ok:false, reading:"" };
+      if (!CFG.readingRegex.test(consNorm)) return { hasAny:true, ok:false, reading:"" };
+      const cons = parseReading(consNorm);
+      if (cons == null) return { hasAny:true, ok:false, reading:"" };
+      return { hasAny:true, ok:true, reading:(prev + cons).toFixed(2) };
+    }
+
+    for (const r of rows) {
+      const locked = (r.getAttribute("data-locked") === "1");
+      if (locked) continue;
+
+      const contract = r.getAttribute("data-contract") || "";
+      const meter = r.getAttribute("data-meter") || "";
+      if (!contract || !meter) continue;
+
+      const st = calcReadingForRow(r);
+      if (!st.hasAny) continue;
+
+      if (!st.ok || !st.reading) {
+        return { ok:false, error:`Skaitītājs ${meter}: pārbaudi ievadi (formatējums) vai izdzēs ievadi.`, lines: [] };
+      }
+
+      lines.push({ meter_no: meter, contract_nr: contract, reading: st.reading });
+    }
+
+    if (!lines.length) return { ok:false, error:"Ievadi rādījumu vismaz vienam skaitītājam.", lines: [] };
+    return { ok:true, lines };
+  }
+
+  async function enterInviteMode(token){
+    INVITE_MODE = true;
+    INVITE_TOKEN = token;
+
+    MODE = "lookup";
+    LOOKUP_ATTEMPTED = true;
+    LOOKUP_LOADING = true;
+    LOOKUP_FOUND = false;
+
+    INVITE_SUBSCRIBER = "";
+    INVITE_ALL_LOCKED = false;
+
+    hideLookupUIForInvite();
+    clearAuto();
+    setSubmitVisible(false);
+
+    setLookupNotice("loading", "<b>Ielādēju datus…</b> Lūdzu uzgaidi.");
+
+    try {
+      const res = await fetch(`/api/invite/resolve?token=${encodeURIComponent(token)}`);
+      const j = await res.json().catch(()=>null);
+
+      if (!res.ok || !j || j.ok !== true) {
+        if (j && j.error === "WINDOW_CLOSED") {
+          setLookupNotice("bad", "<b>Iesniegšana šobrīd nav pieejama.</b> Lūdzu, iesniedz rādījumus no 25.datuma līdz mēneša beigām.");
+        } else {
+          setLookupNotice("bad", "<b>Links nav derīgs vai termiņš beidzies.</b>");
+        }
+        LOOKUP_LOADING = false;
+        refreshAll();
+        return;
+      }
+
+      INVITE_SUBSCRIBER = j.subscriber_code || "";
+      INVITE_ALL_LOCKED = !!j.all_locked;
+
+      setLookupNotice("good", INVITE_ALL_LOCKED
+        ? "<b>Viss iesniegts.</b> Šim mēnesim visi skaitītāji jau ir iesniegti."
+        : "<b>Dati ielādēti.</b> Ievadi jauno rādījumu vai patēriņu."
+      );
+
+      renderAuto(j.addresses || []);
+      LOOKUP_FOUND = true;
+
+      if (INVITE_ALL_LOCKED) setSubmitVisible(false);
+      else setSubmitVisible(true);
+
+      document.getElementById("autoSection").scrollIntoView({ behavior:"smooth", block:"start" });
+    } catch {
+      setLookupNotice("bad", "<b>Neizdevās ielādēt datus.</b> Pamēģini vēlreiz.");
+      setSubmitVisible(false);
+    } finally {
+      LOOKUP_LOADING = false;
+      refreshAll();
+    }
+  }
+
+  async function submitInvite(){
+    const built = buildInvitePayload();
+    if (!built.ok) {
+      modalStateError(built.error);
+      return;
+    }
+
+    modalStateSending();
+
+    try {
+      const res = await fetch("/api/invite/submit", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ token: INVITE_TOKEN, lines: built.lines, website: "" })
+      });
+      const j = await res.json().catch(()=>null);
+
+      if (!res.ok || !j || j.ok !== true) {
+        modalStateError((j && j.error) ? j.error : "Neizdevās nosūtīt.");
+        return;
+      }
+
+      lockMetersInUI(j.newly_locked_meters || []);
+
+      if (j.all_locked) {
+        INVITE_ALL_LOCKED = true;
+        setSubmitVisible(false);
+        setLookupNotice("good", "<b>Viss iesniegts.</b> Šim mēnesim visi skaitītāji jau ir iesniegti.");
+      } else {
+        setLookupNotice("good", "<b>Iesniegts.</b> Vari iesniegt arī atlikušos skaitītājus.");
+      }
+
+      modalStateSuccess();
+    } catch {
+      modalStateError("Savienojuma problēma. Lūdzu, mēģini vēlreiz.");
+    } finally {
+      refreshAll();
+    }
+  }
+
+  function init() {
     initCodeBoxes();
     refreshWindowNotice();
     setLookupNotice(null, "");
     setSubmitVisible(false);  /* <-- sākumā slēpts */
 
     $("#contractNr").addEventListener("input", () => {
+      CONTRACT_TOUCHED = true;
       if (MODE === "lookup") {
         LOOKUP_FOUND = false;
         LOOKUP_ATTEMPTED = false;
@@ -1257,7 +1458,7 @@
 
     $("#submitBtn").addEventListener("click", () => {
       if ($("#submitBtn").classList.contains("disabled")) showSubmitBlockedInfo();
-      else submit();
+      else { if (INVITE_MODE) submitInvite(); else submit(); }
     });
 
     refreshAll();

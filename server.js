@@ -30,6 +30,9 @@ const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || '').trim();
 const ADMIN_USER = process.env.ADMIN_USER || '';
 const ADMIN_PASS = process.env.ADMIN_PASS || '';
 
+// For safer invite token storage (AES-256-GCM). Set in Railway ENV.
+const INVITE_TOKEN_SECRET = (process.env.INVITE_TOKEN_SECRET || '').trim();
+
 const RATE_LIMIT_SUBMIT_PER_10MIN = parseInt(process.env.RATE_LIMIT_SUBMIT_PER_10MIN || '20', 10);
 const RATE_LIMIT_ADDR_PER_MIN = parseInt(process.env.RATE_LIMIT_ADDR_PER_MIN || '120', 10);
 const RATE_LIMIT_LOOKUP_PER_MIN = parseInt(process.env.RATE_LIMIT_LOOKUP_PER_MIN || '120', 10);
@@ -61,7 +64,51 @@ async function ensureSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS history_monthly_meter_month_idx ON history_monthly_meter(month);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS history_monthly_meter_contract_meter_idx ON history_monthly_meter(contract_nr, meter_no);`);
+
+  // contract -> email map (from history XLSX)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contract_email_map (
+      contract_nr text PRIMARY KEY,
+      email text,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+
+  // invite tokens (token on subscriber/month). Token itself is not stored in plaintext when INVITE_TOKEN_SECRET is set.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invite_tokens (
+      id bigserial PRIMARY KEY,
+      month text NOT NULL, -- YYYY-MM (Europe/Riga)
+      subscriber_code text NOT NULL,
+      token_hash text NOT NULL UNIQUE,
+      token_plain text,
+      token_enc text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      expires_at timestamptz,
+      UNIQUE(month, subscriber_code)
+    );
+  `);
+  await pool.query(`ALTER TABLE invite_tokens ADD COLUMN IF NOT EXISTS token_plain text;`);
+  await pool.query(`ALTER TABLE invite_tokens ADD COLUMN IF NOT EXISTS token_enc text;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS invite_tokens_month_idx ON invite_tokens(month);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS invite_tokens_sub_idx ON invite_tokens(subscriber_code);`);
+
+  // meter-level locks for invite flow (partial submissions allowed)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meter_submissions (
+      id bigserial PRIMARY KEY,
+      month text NOT NULL, -- YYYY-MM (Europe/Riga)
+      contract_nr text NOT NULL,
+      meter_no text NOT NULL,
+      submission_id bigint,
+      submitted_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(month, contract_nr, meter_no)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS meter_submissions_month_idx ON meter_submissions(month);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS meter_submissions_contract_idx ON meter_submissions(contract_nr);`);
 }
+
 
 /* ===================== middleware ===================== */
 app.set('trust proxy', 1);
@@ -503,7 +550,310 @@ app.get('/api/history', lookupLimiter, async (req, res) => {
   const meter = String(req.query.meter || '').trim();
 
   if (!/^\d{8}$/.test(subscriber)) return res.status(400).json({ ok:false, error:'Invalid subscriber' });
-  if (!contract) return res.status(400).json({ ok:false, error:'Invalid contract' });
+  if (!contract) return res.statu
+/* ===================== Invite API ===================== */
+app.get('/api/invite/resolve', lookupLimiter, async (req, res) => {
+  const originError = enforceSameOriginSoft(req, res);
+  if (originError) return;
+
+  if (!isWindowOpen()) {
+    return res.status(403).json({ ok:false, error:'WINDOW_CLOSED', window: getSubmissionWindow() });
+  }
+
+  const token = String(req.query.token || '').trim();
+  if (!token) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+
+  const month = currentMonthYYYYMM();
+  const tokenHash = sha256Hex(token);
+
+  const client = await pool.connect();
+  try {
+    const inv = await client.query(`
+      SELECT subscriber_code, expires_at
+      FROM invite_tokens
+      WHERE month=$1 AND token_hash=$2
+      LIMIT 1
+    `, [month, tokenHash]);
+
+    if (!inv.rowCount) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+
+    const subscriber = String(inv.rows[0].subscriber_code || '').trim();
+    if (!subscriber) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+
+    const expiresAt = inv.rows[0].expires_at;
+    if (expiresAt) {
+      const nowUtc = DateTime.utc();
+      const exp = DateTime.fromJSDate(expiresAt instanceof Date ? expiresAt : new Date(expiresAt)).toUTC();
+      if (nowUtc > exp) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+    }
+
+    const batchId = await getLatestBillingBatchId(client);
+    if (!batchId) return res.status(503).json({ ok:false, error:'Billing data not uploaded' });
+
+    const q = await client.query(`
+      SELECT contract_nr, address_raw, meter_serial, last_reading, client_name
+      FROM billing_meters_snapshot
+      WHERE batch_id=$1 AND subscriber_code=$2
+      ORDER BY contract_nr, address_raw, meter_serial
+    `, [batchId, subscriber]);
+
+    if (!q.rowCount) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+
+    const contracts = Array.from(new Set(q.rows.map(r => String(r.contract_nr || '').trim()).filter(Boolean)));
+
+    let lockedMeterSet = new Set();
+    if (contracts.length) {
+      const s = await client.query(`
+        SELECT contract_nr, meter_no
+        FROM meter_submissions
+        WHERE month=$1 AND contract_nr = ANY($2::text[])
+      `, [month, contracts]);
+      lockedMeterSet = new Set(s.rows.map(r => `${String(r.contract_nr)}|${String(r.meter_no)}`));
+    }
+
+    const byAddr = new Map();
+    for (const r of q.rows) {
+      const addr = r.address_raw || '';
+      if (!byAddr.has(addr)) byAddr.set(addr, []);
+      const c = String(r.contract_nr || '').trim();
+      const m = String(r.meter_serial || '').trim();
+      byAddr.get(addr).push({
+        meter_serial: r.meter_serial,
+        last_reading: r.last_reading,
+        contract_nr: c || null,
+        locked: (c && m) ? lockedMeterSet.has(`${c}|${m}`) : true
+      });
+    }
+
+    const allLocked = q.rows.length ? q.rows.every(r => {
+      const c = String(r.contract_nr || '').trim();
+      const m = String(r.meter_serial || '').trim();
+      return c && m ? lockedMeterSet.has(`${c}|${m}`) : true;
+    }) : true;
+
+    res.json({
+      ok: true,
+      month,
+      subscriber_code: subscriber,
+      all_locked: allLocked,
+      addresses: Array.from(byAddr.entries()).map(([address, meters]) => ({ address, meters }))
+    });
+  } catch (e) {
+    console.error('invite resolve error', e);
+    res.status(500).json({ ok:false, error:'Internal error' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/invite/submit', submitLimiter, async (req, res) => {
+  const originError = enforceSameOrigin(req, res);
+  if (originError) return;
+
+  if (!isWindowOpen()) {
+    return res.status(403).json({ ok:false, error:'WINDOW_CLOSED', window: getSubmissionWindow() });
+  }
+
+  const hp = String(req.body.website || req.body.honeypot || '').trim();
+  if (hp) return res.status(400).json({ ok:false, error:'Rejected' });
+
+  const token = String(req.body.token || '').trim();
+  if (!token) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+
+  const rawLines = Array.isArray(req.body.lines) ? req.body.lines : [];
+  if (!rawLines.length || rawLines.length > 800) return res.status(400).json({ ok:false, error:'Invalid lines' });
+
+  const month = currentMonthYYYYMM();
+  const tokenHash = sha256Hex(token);
+
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+
+    const inv = await db.query(`
+      SELECT subscriber_code
+      FROM invite_tokens
+      WHERE month=$1 AND token_hash=$2
+      FOR UPDATE
+    `, [month, tokenHash]);
+
+    if (!inv.rowCount) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+    }
+
+    const subscriber = String(inv.rows[0].subscriber_code || '').trim();
+    if (!subscriber) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({ ok:false, error:'INVALID_LINK' });
+    }
+
+    const cleanLines = [];
+    for (const l of rawLines) {
+      const meter_no = normalizeMeterNo(l.meter_no);
+      const contract_nr = String(l.contract_nr || '').trim();
+      const readingStr = parseReading(l.reading);
+
+      if (!meter_no || !contract_nr || readingStr == null) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({ ok:false, error:'Invalid lines' });
+      }
+      cleanLines.push({ meter_no, contract_nr, reading: readingStr });
+    }
+
+    const contractsInPayload = Array.from(new Set(cleanLines.map(x => x.contract_nr)));
+
+    const lockedQ = await db.query(`
+      SELECT contract_nr, meter_no
+      FROM meter_submissions
+      WHERE month=$1 AND contract_nr = ANY($2::text[])
+    `, [month, contractsInPayload]);
+
+    const lockedMeterSet = new Set(lockedQ.rows.map(r => `${String(r.contract_nr)}|${String(r.meter_no)}`));
+    const openLines = cleanLines.filter(x => !lockedMeterSet.has(`${x.contract_nr}|${x.meter_no}`));
+
+    if (!openLines.length) {
+      await db.query('ROLLBACK');
+      return res.json({ ok:true, newly_locked_meters: [], all_locked: true });
+    }
+
+    const batchId = await getLatestBillingBatchId(db);
+    if (!batchId) {
+      await db.query('ROLLBACK');
+      return res.status(503).json({ ok:false, error:'Billing data not uploaded' });
+    }
+
+    const openContracts = Array.from(new Set(openLines.map(x => x.contract_nr)));
+
+    const snap = await db.query(`
+      SELECT contract_nr, meter_serial, address_raw, last_reading, last_reading_date, next_verif_date,
+             period_from, period_to, meter_type, stage, notes, qty_type, client_name
+      FROM billing_meters_snapshot
+      WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr = ANY($3::text[])
+    `, [batchId, subscriber, openContracts]);
+
+    if (!snap.rowCount) {
+      await db.query('ROLLBACK');
+      return res.status(400).json({ ok:false, error:'Invalid' });
+    }
+
+    const snapByKey = new Map();
+    for (const r of snap.rows) snapByKey.set(String(r.contract_nr) + '|' + String(r.meter_serial), r);
+
+    for (const x of openLines) {
+      const key = x.contract_nr + '|' + x.meter_no;
+      if (!snapByKey.has(key)) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({ ok:false, error:'Meter mismatch' });
+      }
+    }
+
+    const firstSnap = snap.rows[0];
+
+    const submissionIdRes = await db.query(`
+      INSERT INTO submissions (
+        client_submission_id, subscriber_code, contract_nr, billing_batch_id, client_name,
+        address, source_origin, user_agent, ip, client_meta
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+      RETURNING id
+    `, [
+      crypto.randomUUID(),
+      subscriber,
+      'INVITE',
+      batchId,
+      firstSnap.client_name || null,
+      'MULTI',
+      (req.get('origin') || req.get('referer') || null),
+      req.get('user-agent') || null,
+      getClientIp(req),
+      JSON.stringify({ invite: true })
+    ]);
+
+    const submissionId = submissionIdRes.rows[0].id;
+
+    const insertLineSql = `
+      INSERT INTO submission_lines (
+        submission_id, contract_nr, meter_no, address, meter_type, period_from, period_to,
+        next_verif_date, last_reading_date, previous_reading, reading, consumption,
+        stage, notes, qty_type
+      )
+      VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,
+        $10::numeric, $11::numeric, $12::numeric,
+        $13,$14,$15
+      )
+    `;
+
+    const newlyLockedMeters = [];
+
+    for (const x of openLines) {
+      const s = snapByKey.get(x.contract_nr + '|' + x.meter_no);
+      const prev = s.last_reading == null ? null : Number(s.last_reading);
+      const cur = Number(String(x.reading));
+      const cons = (prev == null) ? null : (cur - prev);
+
+      await db.query(insertLineSql, [
+        submissionId,
+        x.contract_nr,
+        x.meter_no,
+        s.address_raw || null,
+        s.meter_type || null,
+        s.period_from || null,
+        s.period_to || null,
+        s.next_verif_date || null,
+        s.last_reading_date || null,
+        prev,
+        cur,
+        cons == null ? null : cons,
+        s.stage || 'Sagatave',
+        s.notes || null,
+        s.qty_type || null,
+      ]);
+
+      await db.query(`
+        INSERT INTO meter_submissions (month, contract_nr, meter_no, submission_id)
+        VALUES ($1,$2,$3,$4)
+        ON CONFLICT (month, contract_nr, meter_no) DO NOTHING
+      `, [month, x.contract_nr, x.meter_no, submissionId]);
+
+      newlyLockedMeters.push({ contract_nr: x.contract_nr, meter_no: x.meter_no });
+    }
+
+    await db.query('COMMIT');
+
+    const allMetersQ = await pool.query(`
+      SELECT contract_nr, meter_serial
+      FROM billing_meters_snapshot
+      WHERE batch_id=$1 AND subscriber_code=$2
+    `, [batchId, subscriber]);
+
+    const allKeys = allMetersQ.rows.map(r => `${String(r.contract_nr)}|${String(r.meter_serial)}`);
+    const allContracts = Array.from(new Set(allMetersQ.rows.map(r => String(r.contract_nr)).filter(Boolean)));
+
+    let lockedNowSet = new Set();
+    if (allContracts.length) {
+      const lockedNowQ = await pool.query(`
+        SELECT contract_nr, meter_no
+        FROM meter_submissions
+        WHERE month=$1 AND contract_nr = ANY($2::text[])
+      `, [month, allContracts]);
+      lockedNowSet = new Set(lockedNowQ.rows.map(r => `${String(r.contract_nr)}|${String(r.meter_no)}`));
+    }
+
+    const allLocked = allKeys.length ? allKeys.every(k => lockedNowSet.has(k)) : true;
+
+    return res.json({ ok:true, newly_locked_meters: newlyLockedMeters, all_locked: allLocked });
+  } catch (e) {
+    try { await db.query('ROLLBACK'); } catch {}
+    console.error('invite submit error', e);
+    return res.status(500).json({ ok:false, error:'Internal error' });
+  } finally {
+    db.release();
+  }
+});
+
+s(400).json({ ok:false, error:'Invalid contract' });
   if (!meter) return res.status(400).json({ ok:false, error:'Invalid meter' });
 
   const client = await pool.connect();
@@ -874,6 +1224,7 @@ app.get('/admin', requireBasicAuth, async (req, res) => {
       <a class="btn ok" href="/admin/history">Ielādēt 12 mēnešu pārskatu</a>
       <a class="btn" href="/admin/analytics">Dashboard</a>
       <a class="btn" href="/admin/exports">Iesniegtie dati</a>
+      <a class="btn" href="/admin/invites">Invite links</a>
     </div>
   `);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1120,7 +1471,197 @@ app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async
   try {
     await client.query('BEGIN');
 
-    const b = await client.query(
+    const b =
+/* ===================== Admin: invites ===================== */
+app.get('/admin/invites', requireBasicAuth, async (req, res) => {
+  const month = currentMonthYYYYMM();
+  const baseUrl = getBaseUrl(req);
+
+  const client = await pool.connect();
+  try {
+    const c = await client.query(`SELECT count(*)::int AS n FROM invite_tokens WHERE month=$1`, [month]);
+    const n = c.rows[0]?.n || 0;
+
+    const html = pageShell('Invites', `
+      <h1>Uzaicinājumi (mēnesis: ${month})</h1>
+      <div class="muted">Linku formāts: <b>${baseUrl}/i/&lt;token&gt;</b></div>
+      <div class="muted">Tokeni šim mēnesim DB: <b>${n}</b></div>
+
+      <form method="POST" action="/admin/invites/generate" style="margin-top:12px">
+        <button class="btn ok" type="submit">Ģenerēt uzaicinājumus šim mēnesim</button>
+      </form>
+
+      <div class="grid" style="margin-top:12px">
+        <a class="btn" href="/admin/invites/export.csv">Lejupielādēt CSV (subscriber_code,email,link)</a>
+      </div>
+
+      <div class="muted" style="margin-top:10px"><a href="/admin">← atpakaļ</a></div>
+    `);
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(html);
+  } catch (e) {
+    console.error('admin invites page error', e);
+    res.status(500).send('Error');
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
+  const month = currentMonthYYYYMM();
+  const now = DateTime.now().setZone(TZ);
+  const expiresAt = now.endOf('month').toUTC().toISO();
+
+  const client = await pool.connect();
+  try {
+    const batchId = await getLatestBillingBatchId(client);
+    if (!batchId) return res.status(503).send('Billing snapshot nav ielādēts.');
+
+    const subs = await client.query(`
+      SELECT DISTINCT subscriber_code
+      FROM billing_meters_snapshot
+      WHERE batch_id = $1 AND subscriber_code IS NOT NULL
+    `, [batchId]);
+
+    await client.query('BEGIN');
+
+    let created = 0;
+
+    for (const r of subs.rows) {
+      const subscriber = String(r.subscriber_code || '').trim();
+      if (!subscriber) continue;
+
+      const token = newToken();
+      const tokenHash = sha256Hex(token);
+      const tokenEnc = encryptInviteToken(token);
+
+      await client.query(`
+        INSERT INTO invite_tokens (month, subscriber_code, token_hash, token_plain, token_enc, expires_at)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        ON CONFLICT (month, subscriber_code)
+        DO UPDATE SET
+          token_hash = EXCLUDED.token_hash,
+          token_plain = EXCLUDED.token_plain,
+          token_enc = EXCLUDED.token_enc,
+          expires_at = EXCLUDED.expires_at
+      `, [month, subscriber, tokenHash, tokenEnc ? null : token, tokenEnc, expiresAt]);
+
+      created++;
+    }
+
+    await client.query('COMMIT');
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(pageShell('Invites OK', `
+      <h1>OK — uzaicinājumi sagatavoti</h1>
+      <div class="muted">Mēnesis: <b>${month}</b></div>
+      <div class="muted">Rindas: <b>${created}</b></div>
+      <div class="muted" style="margin-top:10px"><a href="/admin/invites">← atpakaļ</a></div>
+    `));
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    console.error('invites generate error', e);
+    res.status(500).send('Generate failed');
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
+  const month = currentMonthYYYYMM();
+  const baseUrl = getBaseUrl(req);
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="invites_${month}.csv"`);
+  res.write(toCSVRow(['subscriber_code','email','link']));
+
+  const client = await pool.connect();
+  try {
+    const batchId = await getLatestBillingBatchId(client);
+
+    const tokensQ = await client.query(`
+      SELECT subscriber_code, token_plain, token_enc
+      FROM invite_tokens
+      WHERE month=$1
+      ORDER BY subscriber_code
+    `, [month]);
+
+    // contracts per subscriber from current billing snapshot
+    const subs = tokensQ.rows.map(r => String(r.subscriber_code || '').trim()).filter(Boolean);
+    let contractRows = [];
+    if (batchId && subs.length) {
+      const q = await client.query(`
+        SELECT subscriber_code, contract_nr
+        FROM billing_meters_snapshot
+        WHERE batch_id=$1 AND subscriber_code = ANY($2::text[])
+      `, [batchId, subs]);
+      contractRows = q.rows;
+    }
+
+    const contractsBySub = new Map();
+    for (const r of contractRows) {
+      const sub = String(r.subscriber_code || '').trim();
+      const c = String(r.contract_nr || '').trim();
+      if (!sub || !c) continue;
+      if (!contractsBySub.has(sub)) contractsBySub.set(sub, new Set());
+      contractsBySub.get(sub).add(c);
+    }
+
+    const allContracts = Array.from(new Set(contractRows.map(r => String(r.contract_nr || '').trim()).filter(Boolean)));
+    const emailByContract = new Map();
+    if (allContracts.length) {
+      const e = await client.query(`
+        SELECT contract_nr, email
+        FROM contract_email_map
+        WHERE contract_nr = ANY($1::text[])
+      `, [allContracts]);
+      for (const r of e.rows) {
+        const c = String(r.contract_nr || '').trim();
+        const em = String(r.email || '').trim();
+        if (c) emailByContract.set(c, em);
+      }
+    }
+
+    for (const t of tokensQ.rows) {
+      const sub = String(t.subscriber_code || '').trim();
+      if (!sub) continue;
+
+      let token = '';
+      if (t.token_enc) token = decryptInviteToken(t.token_enc) || '';
+      if (!token && t.token_plain) token = String(t.token_plain);
+      if (!token) continue;
+
+      let bestEmail = '';
+      const contracts = contractsBySub.get(sub) ? Array.from(contractsBySub.get(sub)) : [];
+      if (contracts.length) {
+        const counts = new Map();
+        for (const c of contracts) {
+          const em = String(emailByContract.get(c) || '').trim();
+          if (!isValidEmail(em)) continue;
+          counts.set(em, (counts.get(em) || 0) + 1);
+        }
+        let bestCnt = -1;
+        for (const [em, cnt] of counts.entries()) {
+          if (cnt > bestCnt) { bestCnt = cnt; bestEmail = em; }
+        }
+      }
+
+      const link = `${baseUrl}/i/${token}`;
+      res.write(toCSVRow([sub, bestEmail, link]));
+    }
+
+    res.end();
+  } catch (e) {
+    console.error('invites export error', e);
+    res.status(500);
+    res.end('Export failed');
+  } finally {
+    client.release();
+  }
+});
+
+ await client.query(
       `INSERT INTO billing_import_batches (source_filename) VALUES ($1) RETURNING id`,
       [filename]
     );
