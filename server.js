@@ -120,6 +120,9 @@ async function ensureSchema() {
       qty_type text
     );
   `);
+  await pool.query(`ALTER TABLE billing_meters_snapshot ADD COLUMN IF NOT EXISTS consumption numeric;`);
+  await pool.query(`ALTER TABLE billing_meters_snapshot ADD COLUMN IF NOT EXISTS reading numeric;`);
+  await pool.query(`ALTER TABLE billing_meters_snapshot ADD COLUMN IF NOT EXISTS meter_type text;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS billing_meters_snapshot_batch_sub_idx ON billing_meters_snapshot(batch_id, subscriber_code);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS billing_meters_snapshot_batch_contract_idx ON billing_meters_snapshot(batch_id, contract_nr);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS billing_meters_snapshot_batch_meter_idx ON billing_meters_snapshot(batch_id, contract_nr, meter_serial);`);
@@ -1196,7 +1199,7 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
           const g = geoForAddress(r.address);
           if (!g) continue;
           await pool.query(
-            `NOTIFY submissions_live, $1`,
+            `SELECT pg_notify('submissions_live', $1)`,
             [JSON.stringify({
               address: r.address,
               lat: g.lat,
@@ -1547,8 +1550,11 @@ app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
 
-  // Find header row (your first row contains these)
-  const headerRowIndex = rows.findIndex(r => Array.isArray(r) && r.includes('Klienta kods') && r.includes('Līg. Nr.'));
+  const headerRowIndex = rows.findIndex(r =>
+    Array.isArray(r) &&
+    r.map(x => String(x ?? '').trim()).includes('Klienta kods') &&
+    r.map(x => String(x ?? '').trim()).includes('Līg. Nr.')
+  );
   if (headerRowIndex === -1) return res.status(400).send('Header not found');
 
   const header = rows[headerRowIndex].map(x => String(x ?? '').trim());
@@ -1621,9 +1627,9 @@ app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async
       const meter = String(r[idx.meter] ?? '').trim();
       if (!subscriber || !contract || !meter) continue;
 
-      const dedupeKey = `${batchId}|${contract}|${meter}`;
-      if (seen.has(dedupeKey)) continue;
-      seen.add(dedupeKey);
+      const key = `${batchId}|${contract}|${meter}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
       const lastRaw = idx.last_val >= 0 ? r[idx.last_val] : null;
       const lastNum = (lastRaw == null || lastRaw === '') ? null : Number(lastRaw);
@@ -1666,13 +1672,14 @@ app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async
   }
 });
 
+
 /* ===================== Admin: history XLSX upload (per meter) ===================== */
 function normCell(x) {
   return String(x ?? '').replace(/\r/g,'').replace(/\s+/g,' ').trim();
 }
 function findHeaderRow(rows, wantedNames) {
   const wantSet = new Set(wantedNames.map(normCell));
-  for (let i=0; i<Math.min(rows.length, 120); i++) {
+  for (let i=0; i<Math.min(rows.length, 200); i++) {
     const r = rows[i];
     if (!Array.isArray(r)) continue;
     const cells = r.map(normCell).filter(Boolean);
@@ -1709,9 +1716,8 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
 
   const dataRows = rows.slice(headerRowIndex + 1);
 
-  // aggregate: contract|meter|month -> m3
-  const agg = new Map();
-  const emailCounts = new Map(); // contract -> Map(email -> count)
+  const agg = new Map();                 // contract|meter|month -> m3
+  const emailCounts = new Map();         // contract -> Map(email -> count)
 
   for (const r of dataRows) {
     if (!Array.isArray(r) || !r.length) continue;
@@ -1720,7 +1726,6 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
     const meterNo = normCell(r[iMeter]);
     const periodToIso = excelDateToISO(r[iPeriodTo]);
     const month = isoToMonth(periodToIso);
-
     if (!contract || !meterNo || !month) continue;
 
     const qtyRaw = r[iQty];
@@ -1759,7 +1764,7 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
       count++;
     }
 
-    // update contract_email_map: choose most frequent email per contract
+    // contract -> email (choose most frequent)
     for (const [contract, m] of emailCounts.entries()) {
       let bestEmail = '';
       let bestCnt = -1;
@@ -1791,6 +1796,7 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
     client.release();
   }
 });
+
 
 /* ===================== Exports CSV/XLSX ===================== */
 async function exportCsv(res, req) {
