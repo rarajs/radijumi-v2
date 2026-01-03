@@ -630,7 +630,7 @@
   }
 
   async function openHistory(address, contract, meter) {
-    const subscriber = readAbonentaKods();
+    const subscriber = (typeof INVITE_SUBSCRIBER !== 'undefined' && INVITE_SUBSCRIBER) ? INVITE_SUBSCRIBER : readAbonentaKods();
     if (!CFG.abonRegex.test(subscriber) || !contract || !meter) return;
 
     $('#histTitle').textContent = `Patēriņš pa mēnešiem (m³) — Skaitītājs ${meter}`;
@@ -757,7 +757,18 @@
           el("img", { src:"/assets/history.png?v=2", alt:"Vēsture" })
         ]);
 
-        const f5 = el("div", { class:"field historyCell" }, [
+        
+        // invite: locked meters (server can send m.locked=true)
+        if (m && m.locked) {
+          row.setAttribute("data-locked", "1");
+          newInp.disabled = true;
+          consInp.disabled = true;
+          newInp.placeholder = "Jau iesniegts";
+          consInp.placeholder = "Jau iesniegts";
+        } else {
+          row.setAttribute("data-locked", "0");
+        }
+const f5 = el("div", { class:"field historyCell" }, [
           el("label", { text:"." }),
           histBtn
         ]);
@@ -1244,6 +1255,11 @@
 
     $("#manualSection").style.display = "none";
     $("#addresses").innerHTML = "";
+    CONTRACT_TOUCHED = false;
+    ABON_TOUCHED = false;
+    $("#errAbonents").classList.remove("show");
+    $("#errContract").classList.remove("show");
+
     setSubmitVisible(false);
     refreshAll();
   }
@@ -1461,6 +1477,12 @@
       else { if (INVITE_MODE) submitInvite(); else submit(); }
     });
 
+
+    const inviteTok = detectInviteTokenFromPath();
+    if (inviteTok) {
+      enterInviteMode(inviteTok);
+      return;
+    }
     refreshAll();
   }
 
