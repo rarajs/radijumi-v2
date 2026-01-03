@@ -1266,9 +1266,10 @@ const f5 = el("div", { class:"field historyCell" }, [
 
   // ===== INVITE helpers =====
   function detectInviteTokenFromPath(){
-    const m = window.location.pathname.match(/^\/i\/([A-Za-z0-9_-]{20,})$/);
-    return m ? m[1] : "";
-  }
+  const m = window.location.pathname.match(/^\/i\/([A-Za-z0-9_-]{20,})\/?$/);
+  return m ? m[1] : "";
+}
+
 
   function hideLookupUIForInvite(){
     $("#abonField").style.display = "none";
@@ -1441,7 +1442,14 @@ const f5 = el("div", { class:"field historyCell" }, [
 
   function init() {
     initCodeBoxes();
-    refreshWindowNotice();
+    
+	const inviteTok = detectInviteTokenFromPath();
+    if (inviteTok) {
+      enterInviteMode(inviteTok);
+      return;
+    }
+	
+	refreshWindowNotice();
     setLookupNotice(null, "");
     setSubmitVisible(false);  /* <-- sākumā slēpts */
 
@@ -1478,11 +1486,7 @@ const f5 = el("div", { class:"field historyCell" }, [
     });
 
 
-    const inviteTok = detectInviteTokenFromPath();
-    if (inviteTok) {
-      enterInviteMode(inviteTok);
-      return;
-    }
+    
     refreshAll();
   }
 

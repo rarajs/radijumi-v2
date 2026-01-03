@@ -1675,17 +1675,37 @@ app.post('/admin/billing/upload', requireBasicAuth, upload.single('file'), async
 
 /* ===================== Admin: history XLSX upload (per meter) ===================== */
 function normCell(x) {
-  return String(x ?? '').replace(/\r/g,'').replace(/\s+/g,' ').trim();
+  return String(x ?? '')
+    .replace(/\uFEFF/g, '')      // BOM
+    .replace(/\u00A0/g, ' ')     // NBSP
+    .replace(/[\u200B-\u200D]/g,'') // zero-width
+    .replace(/\r/g,'')
+    .replace(/\s+/g,' ')
+    .trim();
 }
+
 function findHeaderRow(rows, wantedNames) {
-  const wantSet = new Set(wantedNames.map(normCell));
-  for (let i=0; i<Math.min(rows.length, 200); i++) {
+  const want = wantedNames.map(normCell);
+  for (let i = 0; i < Math.min(rows.length, 300); i++) {
     const r = rows[i];
     if (!Array.isArray(r)) continue;
     const cells = r.map(normCell).filter(Boolean);
     let hit = 0;
-    for (const w of wantSet) if (cells.includes(w)) hit++;
+    for (const w of want) {
+      // dažreiz šūnā ir papildus teksts → ļaujam "contains"
+      if (cells.some(c => c === w || c.includes(w))) hit++;
+    }
     if (hit >= 3) return i;
+  }
+  return -1;
+}
+
+function findColIndex(headerRow, name) {
+  const target = normCell(name);
+  for (let i = 0; i < headerRow.length; i++) {
+    const c = normCell(headerRow[i]);
+    if (!c) continue;
+    if (c === target || c.includes(target)) return i;
   }
   return -1;
 }
@@ -1694,21 +1714,35 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
   if (!req.file) return res.status(400).send('No file');
 
   const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
 
   const WANT = ['NĪPLigPap.NĪPLīg.Numurs', 'SkaE.Numurs', 'Periods līdz', 'Daudzums iev.'];
-  const headerRowIndex = findHeaderRow(rows, WANT);
-  if (headerRowIndex === -1) return res.status(400).send('History header not found (need contract/meter/period/consumption columns).');
 
-  const header = rows[headerRowIndex].map(normCell);
-  const col = (name) => header.indexOf(normCell(name));
+  // atrod sheet + header rindu
+  let sheetName = null;
+  let headerRowIndex = -1;
+  let rows = null;
 
-  const iContract = col('NĪPLigPap.NĪPLīg.Numurs');
-  const iMeter = col('SkaE.Numurs');
-  const iPeriodTo = col('Periods līdz');
-  const iQty = col('Daudzums iev.');
-  const iEmail = col('NĪPLigPap.NĪPLīg.Ab.E-pasts');
+  for (const sn of wb.SheetNames) {
+    const ws = wb.Sheets[sn];
+    const r = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+    const idx = findHeaderRow(r, WANT);
+    if (idx !== -1) {
+      sheetName = sn;
+      headerRowIndex = idx;
+      rows = r;
+      break;
+    }
+  }
+
+  if (!rows) return res.status(400).send('History header not found (need contract/meter/period/consumption columns).');
+
+  const header = rows[headerRowIndex];
+
+  const iContract = findColIndex(header, 'NĪPLigPap.NĪPLīg.Numurs');
+  const iMeter    = findColIndex(header, 'SkaE.Numurs');
+  const iPeriodTo = findColIndex(header, 'Periods līdz');
+  const iQty      = findColIndex(header, 'Daudzums iev.');
+  const iEmail    = findColIndex(header, 'NĪPLigPap.NĪPLīg.Ab.E-pasts');
 
   if (iContract < 0 || iMeter < 0 || iPeriodTo < 0 || iQty < 0) {
     return res.status(400).send('Missing required history columns.');
@@ -1716,23 +1750,24 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
 
   const dataRows = rows.slice(headerRowIndex + 1);
 
-  const agg = new Map();                 // contract|meter|month -> m3
-  const emailCounts = new Map();         // contract -> Map(email -> count)
+  const agg = new Map();               // contract|meter|month -> m3
+  const emailCounts = new Map();       // contract -> Map(email -> count)
 
   for (const r of dataRows) {
     if (!Array.isArray(r) || !r.length) continue;
 
     const contract = normCell(r[iContract]);
-    const meterNo = normCell(r[iMeter]);
+    const meterNo  = normCell(r[iMeter]);
     const periodToIso = excelDateToISO(r[iPeriodTo]);
     const month = isoToMonth(periodToIso);
+
     if (!contract || !meterNo || !month) continue;
 
     const qtyRaw = r[iQty];
     let m3 = (qtyRaw == null || qtyRaw === '') ? 0 : Number(qtyRaw);
     if (!Number.isFinite(m3) || m3 < 0) m3 = 0;
 
-    const key = contract + '|' + meterNo + '|' + month;
+    const key = `${contract}|${meterNo}|${month}`;
     agg.set(key, (agg.get(key) || 0) + m3);
 
     if (iEmail >= 0) {
@@ -1785,6 +1820,7 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.end(pageShell('History OK', `
       <h1>OK — vēsture ielādēta</h1>
+      <div class="muted">Sheet: <b>${sheetName}</b></div>
       <div class="muted">Importētas/atjaunotas rindas: <b>${count}</b></div>
       <div class="muted" style="margin-top:10px"><a href="/admin/history">← atpakaļ</a></div>
     `));
@@ -1796,6 +1832,7 @@ app.post('/admin/history/upload', requireBasicAuth, upload.single('file'), async
     client.release();
   }
 });
+
 
 
 /* ===================== Exports CSV/XLSX ===================== */
