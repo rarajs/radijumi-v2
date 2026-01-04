@@ -262,6 +262,14 @@
     #histLoading{ font-size:13px; color:#333; margin-bottom:10px; }
 
     #manualSection{ display:none; }
+	
+	body.invite-mode #abonField,
+    body.invite-mode #contractField,
+    body.invite-mode #lookupRow,
+    body.invite-mode #subscriberTitle {
+    display: none !important;
+}
+
   </style>
 </head>
 
@@ -1042,7 +1050,18 @@ const f5 = el("div", { class:"field historyCell" }, [
     return out;
   }
 
-  function getBlockingReasons() {
+    function getBlockingReasons() {
+
+  if (INVITE_MODE) {
+    if (LOOKUP_LOADING) return ["Notiek ielāde… uzgaidi."];
+    if (!LOOKUP_FOUND) return ["Neizdevās ielādēt datus. Pamēģini atvērt linku vēlreiz."];
+    if (INVITE_ALL_LOCKED) return ["Viss iesniegts šim mēnesim."];
+
+    const built = buildInvitePayload();
+    if (!built.ok) return [built.error];
+    return [];
+  }
+
     const reasons = [];
     const abon = readAbonentaKods();
     const contract = readContractNr();
@@ -1266,15 +1285,18 @@ const f5 = el("div", { class:"field historyCell" }, [
 
   // ===== INVITE helpers =====
   function detectInviteTokenFromPath() {
-  const m = window.location.pathname.match(/^\/i\/([A-Za-z0-9_-]{20,})\/?$/);
+  const p = window.location.pathname || "/";
+  const m = p.match(/^\/(?:i\/)?([A-Za-z0-9_-]{20,})\/?$/);
   const tok = m ? m[1] : "";
-  console.log("PATH=", window.location.pathname, "TOKEN=", tok);
+  console.log("PATH=", p, "TOKEN=", tok);
   return tok;
 }
 
 
 
-  function hideLookupUIForInvite(){
+
+  function hideLookupUIForInvite() {
+  console.log("HIDE LOOKUP UI (invite)");
   const abonField = document.getElementById("abonField");
   const contractField = document.getElementById("contractField");
   const lookupRow = document.getElementById("lookupRow");
@@ -1285,6 +1307,7 @@ const f5 = el("div", { class:"field historyCell" }, [
   if (lookupRow) lookupRow.style.display = "none";
   if (title) title.style.display = "none";
 }
+
 
 
   function lockMetersInUI(meters){
@@ -1355,6 +1378,9 @@ const f5 = el("div", { class:"field historyCell" }, [
   async function enterInviteMode(token){
     console.log("INVITE MODE ON, token=", token);
 	INVITE_MODE = true;
+	hideLookupUIForInvite();
+    setSubmitVisible(false);
+	document.body.classList.add("invite-mode");
     INVITE_TOKEN = token;
 
     MODE = "lookup";
