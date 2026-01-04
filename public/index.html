@@ -16,6 +16,30 @@
       --radius:14px;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
+	
+	:root{
+  --form-col-width: 376px; 
+}
+@media (max-width:520px){
+  :root{ --form-col-width: 100%; }
+}
+	
+#windowNotice{
+  width:100% !important;
+  max-width: var(--form-col-width) !important;
+}
+#lookupNotice{
+  width:100% !important;
+  max-width: var(--form-col-width) !important;
+}
+#contractNr{
+  width:100% !important;
+  max-width: var(--form-col-width) !important;
+}
+#abonentaCodeBoxes{
+  max-width: var(--form-col-width);
+}
+	
     *{ box-sizing:border-box; }
     body{ background:var(--bg); margin:0; padding:24px; color:#111; }
     .wrap{ max-width:980px; margin:0 auto; }
@@ -270,28 +294,27 @@
     body.invite-mode #authBlock {
   display: none !important;
 }
+ 
     .headerRow{
-  display:flex;
-  align-items:center;         
-  justify-content:space-between;
-  gap:16px;
-  flex-wrap:wrap;             
+  display:grid;
+  grid-template-columns: 1fr auto;
+  align-items:start;
+  column-gap:16px;
 }
 
 .headerRow h1{
-  margin:0;                   
+  margin:0;
 }
 
 .companyLogo{
-  height:48px;
+  height:72px;          
   width:auto;
   object-fit:contain;
-  flex:0 0 auto;              
-  max-width:180px;            
+  justify-self:end;     
+  align-self:start;
 }
-
 @media (max-width:520px){
-  .companyLogo{ height:38px; }
+  .companyLogo{ height:64px; }  
 }
 
 
