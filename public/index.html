@@ -270,6 +270,29 @@
     body.invite-mode #authBlock {
   display: none !important;
 }
+    .headerRow{
+  display:flex;
+  align-items:center;         
+  justify-content:space-between;
+  gap:16px;
+  flex-wrap:wrap;             
+}
+
+.headerRow h1{
+  margin:0;                   
+}
+
+.companyLogo{
+  height:48px;
+  width:auto;
+  object-fit:contain;
+  flex:0 0 auto;              
+  max-width:180px;            
+}
+
+@media (max-width:520px){
+  .companyLogo{ height:38px; }
+}
 
 
 
@@ -279,7 +302,11 @@
 <body>
 <div class="wrap">
   <div class="card">
-    <h1>Ūdens skaitītāju rādījumu iesniegšana</h1>
+    <div class="headerRow">
+  <h1>Ūdens skaitītāju rādījumu iesniegšana</h1>
+  <img src="/assets/logo.png" alt="Jūrmalas ūdens" class="companyLogo">
+</div>
+
 
     <div id="windowNotice" class="noticeBox"></div>
     <div id="lookupNotice" class="lookupBox"></div>
