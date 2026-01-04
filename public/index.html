@@ -774,14 +774,32 @@
         
         // invite: locked meters (server can send m.locked=true)
         if (m && m.locked) {
-          row.setAttribute("data-locked", "1");
-          newInp.disabled = true;
-          consInp.disabled = true;
-          newInp.placeholder = "Jau iesniegts";
-          consInp.placeholder = "Jau iesniegts";
-        } else {
-          row.setAttribute("data-locked", "0");
-        }
+  row.setAttribute("data-locked", "1");
+  newInp.disabled = true;
+  consInp.disabled = true;
+
+  const sr = (m.submitted_reading == null) ? "" : String(m.submitted_reading);
+  const sc = (m.submitted_consumption == null) ? "" : String(m.submitted_consumption);
+
+  if (sr) {
+    newInp.value = sr;
+    newInp.placeholder = "";
+  } else {
+    newInp.value = "";
+    newInp.placeholder = "Jau iesniegts";
+  }
+
+  if (sc) {
+    consInp.value = sc;
+    consInp.placeholder = "";
+  } else {
+    consInp.value = "";
+    consInp.placeholder = "Jau iesniegts";
+  }
+} else {
+  row.setAttribute("data-locked", "0");
+}
+
 const f5 = el("div", { class:"field historyCell" }, [
           el("label", { text:"." }),
           histBtn

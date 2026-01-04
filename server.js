@@ -783,18 +783,44 @@ app.get('/api/invite/resolve', lookupLimiter, async (req, res) => {
       `, [month, contracts]);
       lockedMeterSet = new Set(s.rows.map(r => `${String(r.contract_nr)}|${String(r.meter_no)}`));
     }
+    // Map: "contract|meter" -> { reading, consumption }
+let submittedMap = new Map();
+if (contracts.length) {
+  const rr = await client.query(`
+    SELECT ms.contract_nr, ms.meter_no, l.reading, l.consumption
+    FROM meter_submissions ms
+    JOIN submission_lines l
+      ON l.submission_id = ms.submission_id
+     AND l.contract_nr = ms.contract_nr
+     AND l.meter_no = ms.meter_no
+    WHERE ms.month = $1
+      AND ms.contract_nr = ANY($2::text[])
+  `, [month, contracts]);
 
+  for (const r of rr.rows) {
+    const k = `${String(r.contract_nr)}|${String(r.meter_no)}`;
+    submittedMap.set(k, {
+      reading: (r.reading == null) ? null : String(r.reading),
+      consumption: (r.consumption == null) ? null : String(r.consumption)
+    });
+  }
+}
     const byAddr = new Map();
     for (const r of q.rows) {
       const addr = r.address_raw || '';
       if (!byAddr.has(addr)) byAddr.set(addr, []);
       const c = String(r.contract_nr || '').trim();
       const m = String(r.meter_serial || '').trim();
-      byAddr.get(addr).push({
+      const key = (c && m) ? `${c}|${m}` : "";
+	  const locked = (c && m) ? lockedMeterSet.has(key) : true;
+	  const sub = (locked && key) ? (submittedMap.get(key) || null) : null;
+	  byAddr.get(addr).push({
         meter_serial: r.meter_serial,
         last_reading: r.last_reading,
-        contract_nr: c || null,
-        locked: (c && m) ? lockedMeterSet.has(`${c}|${m}`) : true
+		contract_nr: c || null,
+		locked,
+        submitted_reading: sub ? sub.reading : null,
+		submitted_consumption: sub ? sub.consumption : null
       });
     }
 
