@@ -266,9 +266,12 @@
 	body.invite-mode #abonField,
     body.invite-mode #contractField,
     body.invite-mode #lookupRow,
-    body.invite-mode #subscriberTitle {
-    display: none !important;
+    body.invite-mode #subscriberTitle,
+    body.invite-mode #authBlock {
+  display: none !important;
 }
+
+
 
   </style>
 </head>
@@ -281,31 +284,34 @@
     <div id="windowNotice" class="noticeBox"></div>
     <div id="lookupNotice" class="lookupBox"></div>
 
-    <div class="section-title">Abonenta informācija</div>
+    <div id="authBlock">
+  <div class="section-title">Abonenta informācija</div>
 
-    <div class="field">
-      <label>Abonenta kods (8 cipari)</label>
-      <div class="code-boxes" id="abonentaCodeBoxes"></div>
-      <div class="helpRow">
-        <div class="helpLink" id="helpLink1">Kur to atrast rēķinā?</div>
-        <button type="button" class="helpQ" id="helpBtn1" aria-label="Palīdzība">?</button>
-      </div>
-      <div class="error" id="errAbonents">Abonenta kodam jābūt 8 cipariem.</div>
+  <div class="field">
+    <label>Abonenta kods (8 cipari)</label>
+    <div class="code-boxes" id="abonentaCodeBoxes"></div>
+    <div class="helpRow">
+      <div class="helpLink" id="helpLink1">Kur to atrast rēķinā?</div>
+      <button type="button" class="helpQ" id="helpBtn1" aria-label="Palīdzība">?</button>
     </div>
+    <div class="error" id="errAbonents">Abonenta kodam jābūt 8 cipariem.</div>
+  </div>
 
-    <div class="field">
-      <label>Līguma numurs</label>
-      <input id="contractNr" type="text" autocomplete="off" placeholder="Ievadi līguma numuru" />
-      <div class="helpRow">
-        <div class="helpLink" id="helpLink2">Kur to atrast rēķinā?</div>
-        <button type="button" class="helpQ" id="helpBtn2" aria-label="Palīdzība">?</button>
-      </div>
-      <div class="error" id="errContract">Lūdzu ievadi līguma numuru.</div>
+  <div class="field">
+    <label>Līguma numurs</label>
+    <input id="contractNr" type="text" autocomplete="off" placeholder="Ievadi līguma numuru" />
+    <div class="helpRow">
+      <div class="helpLink" id="helpLink2">Kur to atrast rēķinā?</div>
+      <button type="button" class="helpQ" id="helpBtn2" aria-label="Palīdzība">?</button>
     </div>
+    <div class="error" id="errContract">Lūdzu ievadi līguma numuru.</div>
+  </div>
 
-    <div class="btn-row">
-      <button class="btn-secondary" id="lookupBtn" type="button">IEVADĪT</button>
-    </div>
+  <div class="btn-row">
+    <button class="btn-secondary" id="lookupBtn" type="button">IEVADĪT</button>
+  </div>
+</div>
+
 
     <div id="autoSection">
       <div class="section-title">Skaitītāji</div>
@@ -1379,7 +1385,17 @@ const f5 = el("div", { class:"field historyCell" }, [
     console.log("INVITE MODE ON, token=", token);
 	INVITE_MODE = true;
 	hideLookupUIForInvite();
-    setSubmitVisible(false);
+    // bind submit click in invite mode (init() returns early)
+    const btn = document.getElementById("submitBtn");
+if (btn && !btn.dataset.boundInvite) {
+  btn.dataset.boundInvite = "1";
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (btn.classList.contains("disabled")) showSubmitBlockedInfo();
+    else submitInvite();
+  });
+}
+	setSubmitVisible(false);
 	document.body.classList.add("invite-mode");
     INVITE_TOKEN = token;
 
