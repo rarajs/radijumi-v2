@@ -1521,6 +1521,18 @@ const f5 = el("div", { class:"field historyCell" }, [
       else { if (INVITE_MODE) submitInvite(); else submit(); }
     });
 
+const submitBtn = document.getElementById("submitBtn");
+if (submitBtn) {
+  submitBtn.onclick = () => {
+    console.log("SUBMIT CLICK, INVITE_MODE=", INVITE_MODE);
+    if (submitBtn.classList.contains("disabled")) {
+      showSubmitBlockedInfo();
+      return;
+    }
+    if (INVITE_MODE) submitInvite();
+    else submit();
+  };
+}
 
     
     refreshAll();
