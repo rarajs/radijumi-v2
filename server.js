@@ -1411,7 +1411,7 @@ app.get('/admin', requireBasicAuth, async (req, res) => {
     <div class="muted">Izvēlies darbību:</div>
     <div class="grid" style="margin-top:12px">
       <a class="btn ok" href="/admin/import">Ielādēt HORIZON failu</a>
-      <a class="btn" href="/admin/invites">Ielūgumi</a>
+      <a class="btn" href="/admin/invites">Uzaicinājumi</a>
       <a class="btn" href="/admin/exports">Iesniegtie dati</a>
       <a class="btn" href="/admin/analytics">Dashboard</a>
 	  
