@@ -330,9 +330,14 @@ function pickContractNr(bodyOrQuery) {
 }
 function normalizeMeterNo(v) {
   const s = String(v ?? '').trim();
-  if (!/^\d+$/.test(s)) return null;
+
+    if (!/^[A-Za-z0-9#-]+$/.test(s)) return null;
+
+    if (s.length > 40) return null;
+
   return s;
 }
+
 function parseReading(value) {
   const s = String(value ?? '').trim().replace(',', '.');
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;

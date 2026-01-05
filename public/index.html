@@ -440,7 +440,7 @@
 <script>
   const CFG = {
     abonRegex: /^\d{8}$/,
-    meterNrRegex: /^\d+$/,
+    meterNrRegex: /^[A-Za-z0-9#-]{1,40}$/,
     readingRegex: /^\d+([.]\d{1,2})?$/,
     addrMinChars: 1,
     addrLimit: 12,
@@ -1216,7 +1216,7 @@ const f5 = el("div", { class:"field historyCell" }, [
 
     lines.forEach((ln, idx) => {
       if (!ln.adrese) return;
-      if (!CFG.meterNrRegex.test(ln.skaititaja_numurs)) reasons.push(`Skaitītājs ${idx+1}: Nr jābūt tikai cipariem.`);
+      if (!CFG.meterNrRegex.test(ln.skaititaja_numurs)) reasons.push(`Skaitītājs ${idx+1}: Nr jābūt cipari/burti.`);
       const rNorm = normalizeReadingInput(ln.radijums_raw);
       if (!CFG.readingRegex.test(rNorm)) reasons.push(`Skaitītājs ${idx+1}: rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
     });
