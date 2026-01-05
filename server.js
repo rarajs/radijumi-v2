@@ -1412,7 +1412,7 @@ app.get('/admin', requireBasicAuth, async (req, res) => {
     ${latestHtml}
     <div class="muted">Izvēlies darbību:</div>
     <div class="grid" style="margin-top:12px">
-      <a class="btn ok" href="/admin/import">Ielādēt HORIZON failu</a>
+      <a class="btn ok" href="/admin/import">Ielādēt failu no HORIZON</a>
       <a class="btn" href="/admin/analytics">Dashboard</a>
       <a class="btn" href="/admin/reports">Atskaites</a>
       <a class="btn" href="/admin/invites">Invite links</a>
@@ -2942,12 +2942,8 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
       if (!token && t.token_plain) token = String(t.token_plain);
       if (!token) continue;
 
-      let bestEmail = '';
       const contracts = contractsBySub.get(sub) ? Array.from(contractsBySub.get(sub)) : [];
-      if (contracts.length) {
-        const emailSet = new Set();
-
-      const contracts = contractsBySub.get(sub) ? Array.from(contractsBySub.get(sub)) : [];
+      const emailSet = new Set();
       for (const c of contracts) {
         const raw = String(emailByContract.get(c) || '').trim();
         for (const e of extractEmails(raw)) emailSet.add(e);
@@ -2964,7 +2960,7 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
       for (const e of emailSet) {
         res.write(toCSVRow([sub, e, link]));
       }
-}
+    }
 
     res.end();
   } catch (e) {
