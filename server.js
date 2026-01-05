@@ -281,6 +281,14 @@ function enforceSameOriginSoft(req, res) {
   if (referer && !referer.startsWith(PUBLIC_ORIGIN + '/')) return res.status(403).json({ ok:false, error:'Forbidden referer' });
   return null;
 }
+function extractEmails(raw) {
+  return String(raw || '')
+    .split(';')             
+    .map(s => s.trim())
+    .filter(Boolean)
+    .filter(isValidEmail);
+}
+
 
 /* CSV injection guard */
 function csvSanitize(value) {
@@ -2544,37 +2552,36 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
       }
     }
 
-    for (const t of tokensQ.rows) {
-      const sub = String(t.subscriber_code || '').trim();
-      if (!sub) continue;
+for (const t of tokensQ.rows) {
+  const sub = String(t.subscriber_code || '').trim();
+  if (!sub) continue;
 
-      let token = '';
-      if (t.token_enc) token = decryptInviteToken(t.token_enc) || '';
-      if (!token && t.token_plain) token = String(t.token_plain);
-      if (!token) continue;
+  let token = '';
+  if (t.token_enc) token = decryptInviteToken(t.token_enc) || '';
+  if (!token && t.token_plain) token = String(t.token_plain);
+  if (!token) continue;
 
-      let bestEmail = '';
-      const contracts = contractsBySub.get(sub) ? Array.from(contractsBySub.get(sub)) : [];
-      if (contracts.length) {
-        const emailSet = new Set();
+  const link = `${baseUrl}/i/${token}`;
 
-      const contracts = contractsBySub.get(sub) ? Array.from(contractsBySub.get(sub)) : [];
-      for (const c of contracts) {
-        const raw = String(emailByContract.get(c) || '').trim();
-        for (const e of extractEmails(raw)) emailSet.add(e);
-      }
+  // savācam visus epastus no visiem līgumiem šim abonentam
+  const emailSet = new Set();
+  const contracts = contractsBySub.get(sub) ? Array.from(contractsBySub.get(sub)) : [];
 
-      const link = `${baseUrl}/i/${token}`;
+  for (const c of contracts) {
+    const raw = String(emailByContract.get(c) || '').trim();
+    for (const e of extractEmails(raw)) emailSet.add(e);
+  }
 
-      if (emailSet.size === 0) {
-        // keep row with empty email so it's visible which subscribers have no email
-        res.write(toCSVRow([sub, '', link]));
-        continue;
-      }
+  // ja nav neviena epasta -> atstājam tukšu, lai redzams, ka trūkst
+  if (emailSet.size === 0) {
+    res.write(toCSVRow([sub, '', link]));
+    continue;
+  }
 
-      for (const e of emailSet) {
-        res.write(toCSVRow([sub, e, link]));
-      }
+  // viena rinda uz katru epastu (tas pats invite links)
+  for (const e of emailSet) {
+    res.write(toCSVRow([sub, e, link]));
+  }
 }
 
     res.end();
