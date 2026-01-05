@@ -586,6 +586,40 @@ app.get('/api/window', (req, res) => {
   });
 });
 
+app.get('/admin/exports', requireBasicAuth, async (req, res) => {
+  const months = await listAvailableMonths();
+
+  const optionsHtml = months.length
+    ? months.map((m, i) => `<option value="${m}" ${i === 0 ? 'selected' : ''}>${m}</option>`).join('')
+    : `<option value="" disabled selected>Nav datu</option>`;
+
+  const html = pageShell('Exports', `
+    <h1>Iesniegtie dati</h1>
+
+    <form method="GET" action="/admin/export.xlsx">
+      <label>XLSX eksports (pēc veidnes)</label>
+      <select name="month" ${months.length ? '' : 'disabled'}>${optionsHtml}</select>
+      <button class="btn ok" type="submit" ${months.length ? '' : 'disabled'} style="margin-top:12px">
+        Lejupielādēt export.xlsx
+      </button>
+    </form>
+
+    <form method="GET" action="/admin/export.csv" style="margin-top:12px">
+      <label>CSV (debug)</label>
+      <select name="month" ${months.length ? '' : 'disabled'}>${optionsHtml}</select>
+      <button class="btn" type="submit" ${months.length ? '' : 'disabled'} style="margin-top:12px">
+        Lejupielādēt export.csv
+      </button>
+    </form>
+
+    <div class="muted" style="margin-top:10px"><a href="/admin">← atpakaļ</a></div>
+  `);
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.end(html);
+});
+
+
 /* Addresses autocomplete */
 app.get('/api/addresses', addressesLimiter, (req, res) => {
   const originError = enforceSameOriginSoft(req, res);
