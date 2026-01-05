@@ -43,6 +43,29 @@
       <div>
         <div id="map"></div>
         <div class="muted" style="margin-top:8px;" id="mapInfo">—</div>
+      <div class="row" style="margin-top:8px;">
+        <span class="muted">Karte:</span>
+        <select id="mapRange">
+          <option value="all">Visi iesniegumi (no 25. datuma)</option>
+          <option value="today" selected>Šodiena</option>
+          <option value="hour">Pēdējā stunda</option>
+        </select>
+        <span class="muted" id="missingInfo">—</span>
+      </div>
+
+      <div style="margin-top:10px; max-height:200px; overflow:auto; border:1px solid #eee; border-radius:14px;">
+        <table>
+          <thead>
+            <tr>
+              <th>JŪ adrese nav atrasta (no iesniegumiem)</th>
+              <th>Pēdējais</th>
+              <th>Iesn.</th>
+            </tr>
+          </thead>
+          <tbody id="missingTbody"></tbody>
+        </table>
+      </div>
+
 
         <div style="margin-top:12px;">
           <div style="font-weight:900; margin-bottom:6px;">Iesniegumi pa stundām</div>
@@ -120,16 +143,33 @@
     }
   }
 
-  async function loadMapPoints(month){
+  async function loadMapPoints(){
     markers.forEach(m => map.removeLayer(m));
     markers.clear();
 
-    const res = await fetch(`/admin/api/map_points?month=${encodeURIComponent(month)}`);
+    const range = (document.getElementById('mapRange') || {}).value || 'today';
+
+    const res = await fetch(`/admin/api/map_points?range=${encodeURIComponent(range)}`, { credentials:'include' });
     const j = await res.json();
     if (!j.ok) return;
 
     (j.points || []).forEach(addGreenPoint);
     updateMapInfo();
+
+    const tbody = document.getElementById('missingTbody');
+    const mi = document.getElementById('missingInfo');
+    if (tbody) tbody.innerHTML = '';
+    const miss = j.missing || [];
+    if (mi) mi.textContent = `Nav atrastas adreses: ${miss.length}`;
+    for (const r of miss.slice(0, 200)) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(r.address || '')}</td>
+        <td>${escapeHtml(fmtTime(r.last_submitted_at))}</td>
+        <td><b>${escapeHtml(r.submissions || '')}</b></td>
+      `;
+      tbody.appendChild(tr);
+    }
   }
 
   function fmtTime(iso){
@@ -238,7 +278,7 @@
 
   async function reloadAll(){
     const month = document.getElementById('monthSel').value;
-    await loadMapPoints(month);
+    await loadMapPoints();
     await loadLatest(month);
     await loadByHour(month);
   }

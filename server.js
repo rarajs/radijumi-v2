@@ -404,7 +404,11 @@ function normalizeForSearch(s) {
     .trim();
 }
 function addressBase(s) {
-  return String(s || '').split(',')[0].trim();
+  let base = String(s || '').split(',')[0].trim();
+  // Remove apartment suffix like "25 - 1" or "25-1" => "25"
+  base = base.replace(/(\b[0-9]+)\s*-\s*[0-9]+\b/g, '$1');
+  base = base.replace(/\s+/g, ' ').trim();
+  return base;
 }
 function loadAddressesIfNeeded() {
   if (!fs.existsSync(ADDR_XLSX)) {
@@ -1421,6 +1425,81 @@ app.get('/admin', requireBasicAuth, async (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.end(html);
 });
+
+
+app.get('/admin/analytics', requireBasicAuth, (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  const p = path.join(__dirname, 'public', 'admin-analytics.html');
+  res.end(fs.readFileSync(p, 'utf8'));
+});
+
+
+app.get('/admin/api/map_points', requireBasicAuth, async (req, res) => {
+  // Map filter: all (from 25th 00:00 of current month), today, hour
+  const range = String(req.query.range || 'today').trim().toLowerCase(); // all|today|hour
+  const now = DateTime.now().setZone(TZ);
+
+  // submission window start: 25th 00:00 of current month (process window)
+  const windowStart = now.startOf('month').plus({ days: 24 }).startOf('day');
+  const todayStart = now.startOf('day');
+  const hourStart = now.minus({ hours: 1 });
+
+  let timeMin = todayStart; // default 'today'
+  if (range === 'all') timeMin = windowStart;
+  else if (range === 'hour') timeMin = hourStart;
+
+  const client = await pool.connect();
+  try {
+    const q = await client.query(`
+      SELECT
+        l.address,
+        max(s.submitted_at) AS last_submitted_at,
+        count(distinct s.id)::int AS submissions
+      FROM submissions s
+      JOIN submission_lines l ON l.submission_id = s.id
+      WHERE s.submitted_at >= $1::timestamptz
+        AND l.address IS NOT NULL AND l.address <> ''
+      GROUP BY l.address
+      ORDER BY last_submitted_at DESC
+      LIMIT 1200
+    `, [timeMin.toUTC().toISO()]);
+
+    const points = [];
+    const missing = [];
+
+    for (const r of q.rows) {
+      const addr = String(r.address || '').trim();
+      if (!addr) continue;
+
+      const g = geoForAddress(addr);
+      if (g && Number.isFinite(g.lat) && Number.isFinite(g.lon)) {
+        points.push({
+          address: addr,
+          lat: g.lat,
+          lon: g.lon,
+          last_submitted_at: r.last_submitted_at,
+          submissions: r.submissions
+        });
+      } else {
+        missing.push({
+          address: addr,
+          address_base: addressBase(addr),
+          last_submitted_at: r.last_submitted_at,
+          submissions: r.submissions
+        });
+      }
+    }
+
+    res.json({ ok: true, range, window_start: windowStart.toISO(), points, missing });
+  } catch (e) {
+    console.error('map_points api error', e);
+    res.status(500).json({ ok: false, error: 'Internal error' });
+  } finally {
+    client.release();
+  }
+});
+
+
 
 
 app.get('/admin/exports', requireBasicAuth, (req, res) => res.redirect('/admin/reports#radijumi'));
