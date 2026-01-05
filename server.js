@@ -338,6 +338,16 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
 
+function extractEmails(raw) {
+  // Multiple emails in one cell are separated by ';' (sometimes also ',').
+  return String(raw || '')
+    .split(/[;,]/g)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .filter(isValidEmail);
+}
+
+
 /* ===================== Invite token crypto helpers ===================== */
 function newToken() {
   return crypto.randomBytes(32).toString('base64url');
@@ -2408,11 +2418,67 @@ app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
 
     await client.query('COMMIT');
 
+    // Compute invite/email stats for popup
+    const subList = subs.rows.map(r => String(r.subscriber_code || '').trim()).filter(Boolean);
+    let totalEmails = 0;
+    let noEmailSubs = 0;
+
+    if (subList.length) {
+      const contractRows = await client.query(`
+        SELECT DISTINCT subscriber_code, contract_nr
+        FROM billing_meters_snapshot
+        WHERE batch_id=$1 AND subscriber_code = ANY($2::text[])
+      `, [batchId, subList]);
+
+      const contractsBySub = new Map();
+      const allContracts = new Set();
+      for (const r of contractRows.rows) {
+        const s = String(r.subscriber_code || '').trim();
+        const c = String(r.contract_nr || '').trim();
+        if (!s || !c) continue;
+        if (!contractsBySub.has(s)) contractsBySub.set(s, new Set());
+        contractsBySub.get(s).add(c);
+        allContracts.add(c);
+      }
+
+      const emailByContract = new Map();
+      if (allContracts.size) {
+        const e = await client.query(`
+          SELECT contract_nr, email
+          FROM contract_email_map
+          WHERE contract_nr = ANY($1::text[])
+        `, [Array.from(allContracts)]);
+        for (const r of e.rows) {
+          const c = String(r.contract_nr || '').trim();
+          const em = String(r.email || '').trim();
+          if (c) emailByContract.set(c, em);
+        }
+      }
+
+      for (const s of subList) {
+        const emailSet = new Set();
+        const cs = contractsBySub.get(s) ? Array.from(contractsBySub.get(s)) : [];
+        for (const c of cs) {
+          const raw = String(emailByContract.get(c) || '').trim();
+          for (const em of extractEmails(raw)) emailSet.add(em);
+        }
+        if (emailSet.size === 0) noEmailSubs++;
+        totalEmails += emailSet.size;
+      }
+    }
+
+
+
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.end(pageShell('Invites OK', `
       <h1>OK — uzaicinājumi sagatavoti</h1>
       <div class="muted">Mēnesis: <b>${month}</b></div>
-      <div class="muted">Rindas: <b>${created}</b></div>
+      <div class="muted">Unikālie inviti: <b>${created}</b></div>
+      <div class="muted">E-pastu skaits (saņēmēji): <b>${totalEmails}</b></div>
+      <div class="muted">Inviti bez e-pasta: <b>${noEmailSubs}</b></div>
+      <script>
+        alert("Invite ģenerēšana pabeigta.\nUnikālie inviti: ${created}\nE-pastu skaits: ${totalEmails}\nBez e-pasta: ${noEmailSubs}");
+      </script>
       <div class="muted" style="margin-top:10px"><a href="/admin/invites">← atpakaļ</a></div>
     `));
   } catch (e) {
@@ -2490,21 +2556,26 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
       let bestEmail = '';
       const contracts = contractsBySub.get(sub) ? Array.from(contractsBySub.get(sub)) : [];
       if (contracts.length) {
-        const counts = new Map();
-        for (const c of contracts) {
-          const em = String(emailByContract.get(c) || '').trim();
-          if (!isValidEmail(em)) continue;
-          counts.set(em, (counts.get(em) || 0) + 1);
-        }
-        let bestCnt = -1;
-        for (const [em, cnt] of counts.entries()) {
-          if (cnt > bestCnt) { bestCnt = cnt; bestEmail = em; }
-        }
+        const emailSet = new Set();
+
+      const contracts = contractsBySub.get(sub) ? Array.from(contractsBySub.get(sub)) : [];
+      for (const c of contracts) {
+        const raw = String(emailByContract.get(c) || '').trim();
+        for (const e of extractEmails(raw)) emailSet.add(e);
       }
 
       const link = `${baseUrl}/i/${token}`;
-      res.write(toCSVRow([sub, bestEmail, link]));
-    }
+
+      if (emailSet.size === 0) {
+        // keep row with empty email so it's visible which subscribers have no email
+        res.write(toCSVRow([sub, '', link]));
+        continue;
+      }
+
+      for (const e of emailSet) {
+        res.write(toCSVRow([sub, e, link]));
+      }
+}
 
     res.end();
   } catch (e) {
