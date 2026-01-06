@@ -1522,12 +1522,12 @@ app.get('/admin/api/analytics', requireBasicAuth, async (req, res) => {
 
     // Last import timestamp (no filename/batch id)
     const imp = await client.query(`
-      SELECT created_at
+      SELECT uploaded_at
       FROM billing_import_batches
       ORDER BY id DESC
       LIMIT 1
     `);
-    const last_import_at = imp.rows[0]?.created_at || null;
+    const last_import_at = imp.rows[0]?.uploaded_at || null;
 
     // Invite tokens count for selected month
     const tok = await client.query(`
@@ -1560,7 +1560,7 @@ app.get('/admin/api/analytics', requireBasicAuth, async (req, res) => {
       SELECT
         count(*) FILTER (WHERE sl.consumption = 0)::int AS zero_consumption,
         count(*) FILTER (WHERE sl.consumption < 0)::int AS negative_consumption,
-        count(*) FILTER (WHERE sl.reading < sl.last_reading)::int AS reading_lt_prev
+        count(*) FILTER (WHERE sl.previous_reading IS NOT NULL AND sl.reading < sl.previous_reading)::int AS reading_lt_prev
       FROM submission_lines sl
       JOIN submissions s ON s.id = sl.submission_id
       WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
