@@ -1520,7 +1520,7 @@ app.get('/admin/api/analytics', requireBasicAuth, async (req, res) => {
     const m = (/^\d{4}-\d{2}$/.test(monthQ)) ? monthQ : null;
     const monthEff = m || (await client.query(`SELECT to_char(now() AT TIME ZONE $1, 'YYYY-MM') AS m`, [tz])).rows[0].m;
 
-    // Last import timestamp (no filename/batch id as requested)
+    // Last import timestamp (no filename/batch id)
     const imp = await client.query(`
       SELECT created_at
       FROM billing_import_batches
@@ -1566,7 +1566,7 @@ app.get('/admin/api/analytics', requireBasicAuth, async (req, res) => {
       WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
     `, [tz, monthEff]);
 
-    // Hourly dynamics for today vs yesterday (0-23)
+    // Hourly submissions: today vs yesterday (0..23)
     const hourly = await client.query(`
       WITH base AS (
         SELECT date_trunc('hour', submitted_at AT TIME ZONE $1) AS h
