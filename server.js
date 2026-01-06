@@ -307,6 +307,25 @@ async function getActiveMonthForLatestBatch(client) {
 
   return { batchId, activeMonth: months[months.length - 1] }; // fallback = pēdējais pieejamais
 }
+async function getActiveMonthForSubscriber(client, batchId, subscriber) {
+  const target = prevMonthYYYYMM();
+
+  const r = await client.query(`
+    SELECT DISTINCT to_char(period_to, 'YYYY-MM') AS m
+    FROM billing_meters_snapshot
+    WHERE batch_id=$1
+      AND subscriber_code=$2
+      AND period_to IS NOT NULL
+    ORDER BY m
+  `, [batchId, subscriber]);
+
+  const months = r.rows.map(x => x.m).filter(Boolean);
+
+  if (months.includes(target)) return target;
+  if (!months.length) return target;
+  return months[months.length - 1]; // fallback = pēdējais pieejamais šim abonentam
+}
+
 
 /* CSV injection guard */
 function csvSanitize(value) {
@@ -674,9 +693,10 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
   try {
     // <-- ACTIVE month with fallback
     const am = await getActiveMonthForLatestBatch(client);
-    const activeMonth = am.activeMonth;
     const batchId = am.batchId;
     if (!batchId) return res.json({ ok:true, found:false });
+
+    const activeMonth = await getActiveMonthForSubscriber(client, batchId, subscriber);
 
     // first: check if subscriber+contract exists in ACTIVE month
     const okMatch = await client.query(`
