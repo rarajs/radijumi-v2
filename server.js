@@ -1500,6 +1500,110 @@ app.get('/admin/api/map_points', requireBasicAuth, async (req, res) => {
 });
 
 
+// ===== Dashboard analytics APIs =====
+app.get('/admin/api/report_months', requireBasicAuth, async (req, res) => {
+  try {
+    const months = await listReportMonths();
+    res.json({ ok: true, months });
+  } catch (e) {
+    console.error('report_months api error', e);
+    res.status(500).json({ ok:false, error:'Internal error' });
+  }
+});
+
+app.get('/admin/api/analytics', requireBasicAuth, async (req, res) => {
+  // month in YYYY-MM; default current month in Riga
+  const monthQ = String(req.query.month || '').trim();
+  const client = await pool.connect();
+  try {
+    const tz = TZ;
+    const m = (/^\d{4}-\d{2}$/.test(monthQ)) ? monthQ : null;
+    const monthEff = m || (await client.query(`SELECT to_char(now() AT TIME ZONE $1, 'YYYY-MM') AS m`, [tz])).rows[0].m;
+
+    // Last import timestamp (no filename/batch id as requested)
+    const imp = await client.query(`
+      SELECT created_at
+      FROM billing_import_batches
+      ORDER BY id DESC
+      LIMIT 1
+    `);
+    const last_import_at = imp.rows[0]?.created_at || null;
+
+    // Invite tokens count for selected month
+    const tok = await client.query(`
+      SELECT count(*)::int AS tokens
+      FROM invite_tokens
+      WHERE month = $1
+    `, [monthEff]);
+    const tokens = tok.rows[0]?.tokens ?? 0;
+
+    // Today / Yesterday submissions and unique subscribers
+    const dy = await client.query(`
+      WITH t AS (
+        SELECT
+          (submitted_at AT TIME ZONE $1)::date AS d,
+          count(*)::int AS submissions,
+          count(distinct subscriber_code)::int AS subs
+        FROM submissions
+        WHERE (submitted_at AT TIME ZONE $1)::date >= ((now() AT TIME ZONE $1)::date - interval '1 day')::date
+        GROUP BY 1
+      )
+      SELECT
+        coalesce((SELECT submissions FROM t WHERE d = (now() AT TIME ZONE $1)::date), 0) AS today_submissions,
+        coalesce((SELECT subs FROM t WHERE d = (now() AT TIME ZONE $1)::date), 0) AS today_subs,
+        coalesce((SELECT submissions FROM t WHERE d = ((now() AT TIME ZONE $1)::date - interval '1 day')::date), 0) AS yday_submissions,
+        coalesce((SELECT subs FROM t WHERE d = ((now() AT TIME ZONE $1)::date - interval '1 day')::date), 0) AS yday_subs
+    `, [tz]);
+
+    // Anomalies for selected month (based on submission_lines)
+    const an = await client.query(`
+      SELECT
+        count(*) FILTER (WHERE sl.consumption = 0)::int AS zero_consumption,
+        count(*) FILTER (WHERE sl.consumption < 0)::int AS negative_consumption,
+        count(*) FILTER (WHERE sl.reading < sl.last_reading)::int AS reading_lt_prev
+      FROM submission_lines sl
+      JOIN submissions s ON s.id = sl.submission_id
+      WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
+    `, [tz, monthEff]);
+
+    // Hourly dynamics for today vs yesterday (0-23)
+    const hourly = await client.query(`
+      WITH base AS (
+        SELECT date_trunc('hour', submitted_at AT TIME ZONE $1) AS h
+        FROM submissions
+        WHERE (submitted_at AT TIME ZONE $1) >= (date_trunc('day', now() AT TIME ZONE $1) - interval '1 day')
+      ),
+      agg AS (
+        SELECT
+          extract(hour from h)::int AS hour,
+          sum(CASE WHEN h::date = (now() AT TIME ZONE $1)::date THEN 1 ELSE 0 END)::int AS today,
+          sum(CASE WHEN h::date = ((now() AT TIME ZONE $1)::date - interval '1 day')::date THEN 1 ELSE 0 END)::int AS yday
+        FROM base
+        GROUP BY 1
+      )
+      SELECT hour, today, yday
+      FROM agg
+      ORDER BY hour
+    `, [tz]);
+
+    res.json({
+      ok:true,
+      month: monthEff,
+      last_import_at,
+      tokens,
+      today: dy.rows[0],
+      anomalies: an.rows[0],
+      hourly: hourly.rows
+    });
+  } catch (e) {
+    console.error('analytics api error', e);
+    res.status(500).json({ ok:false, error:'Internal error' });
+  } finally {
+    client.release();
+  }
+});
+
+
 
 
 app.get('/admin/exports', requireBasicAuth, (req, res) => res.redirect('/admin/reports#radijumi'));
