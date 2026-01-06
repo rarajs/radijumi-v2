@@ -281,6 +281,32 @@ function enforceSameOriginSoft(req, res) {
   if (referer && !referer.startsWith(PUBLIC_ORIGIN + '/')) return res.status(403).json({ ok:false, error:'Forbidden referer' });
   return null;
 }
+function prevMonthYYYYMM() {
+  return DateTime.now().setZone(TZ).startOf('month').minus({ months: 1 }).toFormat('yyyy-MM');
+}
+
+async function getActiveMonthForLatestBatch(client) {
+  const batchId = await getLatestBillingBatchId(client);
+  if (!batchId) return { batchId: null, activeMonth: prevMonthYYYYMM() };
+
+  // mēneši no period_to (text 'YYYY-MM-DD')
+  const r = await client.query(`
+    SELECT DISTINCT substring(period_to from 1 for 7) AS m
+    FROM billing_meters_snapshot
+    WHERE batch_id=$1
+	  AND period_to IS NOT NULL
+      AND period_to ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    ORDER BY m
+  `, [batchId]);
+
+  const target = prevMonthYYYYMM();
+  const months = r.rows.map(x => x.m).filter(Boolean);
+
+  if (months.includes(target)) return { batchId, activeMonth: target };
+  if (!months.length) return { batchId, activeMonth: target };
+
+  return { batchId, activeMonth: months[months.length - 1] }; // fallback = pēdējais pieejamais
+}
 
 /* CSV injection guard */
 function csvSanitize(value) {
@@ -633,7 +659,7 @@ app.get('/api/addresses', addressesLimiter, (req, res) => {
   return res.json({ ok:true, items: [] });
 });
 
-/* LOOKUP: if subscriber+contract exists -> return ALL subscriber meters */
+/* LOOKUP: if subscriber+contract exists -> return ACTIVE subscriber meters */
 app.get('/api/lookup', lookupLimiter, async (req, res) => {
   const originError = enforceSameOriginSoft(req, res);
   if (originError) return;
@@ -646,24 +672,36 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
 
   const client = await pool.connect();
   try {
-    const batchId = await getLatestBillingBatchId(client);
+    // <-- ACTIVE month with fallback
+    const am = await getActiveMonthForLatestBatch(client);
+    const activeMonth = am.activeMonth;
+    const batchId = am.batchId;
     if (!batchId) return res.json({ ok:true, found:false });
 
+    // first: check if subscriber+contract exists in ACTIVE month
     const okMatch = await client.query(`
       SELECT 1
       FROM billing_meters_snapshot
-      WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr=$3
+      WHERE batch_id=$1
+        AND subscriber_code=$2
+        AND contract_nr=$3
+        AND substring(period_to from 1 for 7) = $4
+        AND last_reading IS NOT NULL
       LIMIT 1
-    `, [batchId, subscriber, contract]);
+    `, [batchId, subscriber, contract, activeMonth]);
 
     if (!okMatch.rowCount) return res.json({ ok:true, found:false });
 
+    // then: return ALL ACTIVE meters for subscriber (in ACTIVE month)
     const q = await client.query(`
-      SELECT contract_nr, address_raw, meter_serial, last_reading, client_name
+      SELECT contract_nr, address_raw, meter_serial, last_reading, client_name, period_to
       FROM billing_meters_snapshot
-      WHERE batch_id=$1 AND subscriber_code=$2
+      WHERE batch_id=$1
+        AND subscriber_code=$2
+        AND substring(period_to from 1 for 7) = $3
+        AND last_reading IS NOT NULL
       ORDER BY contract_nr, address_raw, meter_serial
-    `, [batchId, subscriber]);
+    `, [batchId, subscriber, activeMonth]);
 
     if (!q.rowCount) return res.json({ ok:true, found:false });
 
@@ -687,6 +725,7 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
       ok: true,
       found: true,
       batch_id: batchId,
+      active_month: activeMonth,
       client_name: q.rows[0].client_name || null,
       contracts: Array.from(contracts),
       addresses: Array.from(byAddr.entries()).map(([address, meters]) => ({ address, meters }))
@@ -2953,14 +2992,20 @@ app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
 
   const client = await pool.connect();
   try {
-    const batchId = await getLatestBillingBatchId(client);
+    const am = await getActiveMonthForLatestBatch(client);
+    const activeMonth = am.activeMonth;
+    const batchId = am.batchId;
     if (!batchId) return res.status(503).send('Billing snapshot nav ielādēts.');
 
+    // ONLY active subscribers (at least 1 active meter row)
     const subs = await client.query(`
       SELECT DISTINCT subscriber_code
       FROM billing_meters_snapshot
-      WHERE batch_id = $1 AND subscriber_code IS NOT NULL
-    `, [batchId]);
+      WHERE batch_id = $1
+        AND subscriber_code IS NOT NULL
+        AND substring(period_to from 1 for 7) = $2
+        AND last_reading IS NOT NULL
+    `, [batchId, activeMonth]);
 
     await client.query('BEGIN');
 
@@ -2990,17 +3035,21 @@ app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
 
     await client.query('COMMIT');
 
-    // Compute invite/email stats for popup
+    // Stats for popup (emails only for ACTIVE subscribers)
     const subList = subs.rows.map(r => String(r.subscriber_code || '').trim()).filter(Boolean);
     let totalEmails = 0;
     let noEmailSubs = 0;
 
     if (subList.length) {
+      // contracts only in ACTIVE month (so export matches active too)
       const contractRows = await client.query(`
         SELECT DISTINCT subscriber_code, contract_nr
         FROM billing_meters_snapshot
-        WHERE batch_id=$1 AND subscriber_code = ANY($2::text[])
-      `, [batchId, subList]);
+        WHERE batch_id=$1
+          AND subscriber_code = ANY($2::text[])
+          AND substring(period_to from 1 for 7) = $3
+          AND last_reading IS NOT NULL
+      `, [batchId, subList, activeMonth]);
 
       const contractsBySub = new Map();
       const allContracts = new Set();
@@ -3039,17 +3088,16 @@ app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
       }
     }
 
-
-
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.end(pageShell('Invites OK', `
       <h1>OK — uzaicinājumi sagatavoti</h1>
       <div class="muted">Mēnesis: <b>${month}</b></div>
+      <div class="muted">Active mēnesis (fallback): <b>${activeMonth}</b></div>
       <div class="muted">Unikālie inviti: <b>${created}</b></div>
       <div class="muted">E-pastu skaits (saņēmēji): <b>${totalEmails}</b></div>
       <div class="muted">Inviti bez e-pasta: <b>${noEmailSubs}</b></div>
       <script>
-        alert("Invite ģenerēšana pabeigta.\nUnikālie inviti: ${created}\nE-pastu skaits: ${totalEmails}\nBez e-pasta: ${noEmailSubs}");
+        alert("Invite ģenerēšana pabeigta.\\nActive mēnesis: ${activeMonth}\\nUnikālie inviti: ${created}\\nE-pastu skaits: ${totalEmails}\\nBez e-pasta: ${noEmailSubs}");
       </script>
       <div class="muted" style="margin-top:10px"><a href="/admin/invites">← atpakaļ</a></div>
     `));
@@ -3087,8 +3135,11 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
       const q = await client.query(`
         SELECT subscriber_code, contract_nr
         FROM billing_meters_snapshot
-        WHERE batch_id=$1 AND subscriber_code = ANY($2::text[])
-      `, [batchId, subs]);
+        WHERE batch_id=$1
+          AND subscriber_code = ANY($2::text[])
+          AND substring(period_to from 1 for 7) = $3
+          AND last_reading IS NOT NULL
+      `, [batchId, subs, activeMonth]);
       contractRows = q.rows;
     }
 
