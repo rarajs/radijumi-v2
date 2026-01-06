@@ -291,12 +291,12 @@ async function getActiveMonthForLatestBatch(client) {
 
   // mēneši no period_to (text 'YYYY-MM-DD')
   const r = await client.query(`
-    SELECT DISTINCT substring(period_to from 1 for 7) AS m
+    SELECT DISTINCT to_char(period_to, 'YYYY-MM') AS m
     FROM billing_meters_snapshot
     WHERE batch_id=$1
-	  AND period_to IS NOT NULL
-      AND period_to ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+      AND period_to IS NOT NULL
     ORDER BY m
+
   `, [batchId]);
 
   const target = prevMonthYYYYMM();
@@ -685,7 +685,7 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
       WHERE batch_id=$1
         AND subscriber_code=$2
         AND contract_nr=$3
-        AND substring(period_to from 1 for 7) = $4
+        AND to_char(period_to, 'YYYY-MM') = $4
         AND last_reading IS NOT NULL
       LIMIT 1
     `, [batchId, subscriber, contract, activeMonth]);
@@ -698,7 +698,7 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
       FROM billing_meters_snapshot
       WHERE batch_id=$1
         AND subscriber_code=$2
-        AND substring(period_to from 1 for 7) = $3
+        AND to_char(period_to, 'YYYY-MM') = $3
         AND last_reading IS NOT NULL
       ORDER BY contract_nr, address_raw, meter_serial
     `, [batchId, subscriber, activeMonth]);
@@ -3003,7 +3003,7 @@ app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
       FROM billing_meters_snapshot
       WHERE batch_id = $1
         AND subscriber_code IS NOT NULL
-        AND substring(period_to from 1 for 7) = $2
+        AND to_char(period_to, 'YYYY-MM') = $2
         AND last_reading IS NOT NULL
     `, [batchId, activeMonth]);
 
