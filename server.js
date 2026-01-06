@@ -1416,7 +1416,7 @@ app.get('/admin', requireBasicAuth, async (req, res) => {
     ${latestHtml}
     <div class="muted">Izvēlies darbību:</div>
     <div class="grid" style="margin-top:12px">
-      <a class="btn ok" href="/admin/import">Ielādēt HORIZON failu</a>
+      <a class="btn ok" href="/admin/import">Ielādēt failu no HORIZON</a>
       <a class="btn" href="/admin/analytics">Dashboard</a>
       <a class="btn" href="/admin/reports">Atskaites</a>
       <a class="btn" href="/admin/invites">Invite links</a>
@@ -2030,7 +2030,7 @@ app.get('/admin/import', requireBasicAuth, async (req, res) => {
     : `<p>Jaunākais imports: <i>nav</i></p>`;
 
   const html = pageShell('Import', `
-    <h1>Ielādēt HORIZON failu</h1>
+    <h1>Billing eksporta imports (viens fails)</h1>
     ${latestInfo}
     <form id="importForm" action="/admin/import/upload" method="post" enctype="multipart/form-data">
       <p><input type="file" name="file" accept=".csv,.xlsx" required /></p>
