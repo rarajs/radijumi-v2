@@ -1685,7 +1685,7 @@ app.get('/admin/reports', requireBasicAuth, async (req, res) => {
     <h1>Atskaites</h1>
 
     <div class="grid" style="margin-top:12px">
-      <button class="btn ok" id="tabRadijumi" type="button">Rādījumi</button>
+      <button class="btn" id="tabRadijumi" type="button">Rādījumi</button>
       <button class="btn" id="tabNeatb" type="button">Neatbildētie uzaicinājumi</button>
       <button class="btn" id="tabTech" type="button">Tehniskā atskaite</button>
     </div>
@@ -1770,14 +1770,21 @@ app.get('/admin/reports', requireBasicAuth, async (req, res) => {
       tabNea.addEventListener('click', () => show('neatb'));
       tabTec.addEventListener('click', () => show('tech'));
 
-      function initFromHash() {
-        const h = (location.hash || '').toLowerCase();
-        if (h.includes('neat')) return show('neatb');
-        if (h.includes('tehn')) return show('tech');
-        return show('radijumi');
+      function hideAll() {
+        secRad.style.display = 'none';
+        secNea.style.display = 'none';
+        secTec.style.display = 'none';
+
+        tabRad.className = 'btn';
+        tabNea.className = 'btn';
+        tabTec.className = 'btn';
+
+        // lai nebūtu auto-open no hash
+        if (location.hash) history.replaceState(null, '', location.pathname);
       }
-      window.addEventListener('hashchange', initFromHash);
-      initFromHash();
+
+      // pirmajā ekrānā – tikai 3 pogas
+      hideAll();
     </script>
   `));
 });
