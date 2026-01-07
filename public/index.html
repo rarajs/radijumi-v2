@@ -221,57 +221,95 @@
     .infoBox.show{ display:block; }
 
     /* AUTO */
-    #autoSection{ display:none; margin-top:10px; }
+#autoSection{ display:none; margin-top:10px; }
 
-    .auto-meter-row{
-      display:grid;
-      grid-template-columns: 170px 170px 220px 140px 54px; /* pēdējā ikonai */
-      gap:10px;
-      align-items:start;
-      margin-top:10px;
-    }
-    .auto-meter-row.neg input[data-role="cons"]{ color:var(--danger); font-weight:1000; }
+/* Desktop: 5 kolonnas, poga ietilpst rāmī */
+.auto-meter-row{
+  display:grid;
+  grid-template-columns:
+    minmax(120px,1fr)
+    minmax(120px,1fr)
+    minmax(160px,1.2fr)
+    minmax(120px,1fr)
+    54px;
+  gap:10px;
+  align-items:start;
+  margin-top:10px;
+  width:100%;
+  max-width:100%;
+}
 
-    /* kompaktāki ievades lauki auto režīmā */
-    #autoSection input[type="text"]{ padding:10px 10px; }
-    #autoSection label{ font-size:12px; }
+/* Patēriņš negatīvs */
+.auto-meter-row.neg input[data-role="cons"]{
+  color:var(--danger);
+  font-weight:1000;
+}
 
-    @media (max-width:640px){
-      .auto-meter-row{ grid-template-columns: 1fr; }
-    }
+/* kompaktāki ievades lauki auto režīmā */
+#autoSection input[type="text"]{ padding:10px 10px; }
+#autoSection label{ font-size:12px; }
 
-    /* vēstures ikona aizpilda visu kvadrātu */
-    .histIconBtn{
-      width:44px;
-      height:44px;
-      border-radius:12px;
-      border:2px solid #cfd6de;
-      background:#fff;
-      cursor:pointer;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      padding:0;
-    }
-    .histIconBtn:hover{ background:#eef3f8; }
-    .histIconBtn img{
-      width:100%;
-      height:100%;
-      padding:0;           /* lielāka ikona, bez “sīka” efekta */
-      object-fit:cover;
-	  border-radius:10px;
-      display:block;
-    }
+/* History poga (kvadrāts) */
+.histIconBtn{
+  width:44px;
+  height:44px;
+  border-radius:12px;
+  border:2px solid #cfd6de;
+  background:#fff;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:0;
+}
+.histIconBtn:hover{ background:#eef3f8; }
+.histIconBtn img{
+  width:100%;
+  height:100%;
+  padding:0;
+  object-fit:cover;
+  border-radius:10px;
+  display:block;
+}
 
-    .historyCell{
-      display:flex;
-      flex-direction:column;
-      align-items:flex-end;
-    }
-    .historyCell label{
-      opacity:0;
-      height:16px;
-    }
+/* history cell (5 kolonnās: pēdējā kolonna) */
+.historyCell{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+}
+.historyCell label{
+  font-size:12px;
+  line-height:16px;
+}
+
+/* Rotate / šaurāks ekrāns: 2 kolonnas, history vienmēr pa labi */
+@media (max-width: 900px){
+  .auto-meter-row{
+    grid-template-columns: 1fr 1fr;
+  }
+  .historyCell{
+    grid-column: 2;
+    justify-self:end;
+  }
+  .historyCell label{
+    display:none;
+  }
+}
+
+/* Mobile: 1 kolonna, history pa labi */
+@media (max-width: 640px){
+  .auto-meter-row{
+    grid-template-columns: 1fr;
+  }
+  .historyCell{
+    grid-column: 1;
+    justify-self:end;
+  }
+  .historyCell label{
+    display:none;
+  }
+}
 
     /* modals */
     #submitModal, #notFoundModal, #helpModal, #historyModal { position: fixed; inset: 0; z-index: 9999; display:none; }
