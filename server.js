@@ -1578,33 +1578,44 @@ app.get('/admin/api/analytics', requireBasicAuth, async (req, res) => {
     `, [monthEff]);
     const tokens = tok.rows[0]?.tokens ?? 0;
 
-        // Klienti / Adreses (šodien / vakar) + bāze procentiem pret izvēlēto mēnesi
-    const caQ = await client.query(`
-      WITH s AS (
-        SELECT
-          (submitted_at AT TIME ZONE $1)::date AS d,
-          subscriber_code,
-          address
-        FROM submissions
-        WHERE to_char(date_trunc('month', submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
-      )
-      SELECT
-        COUNT(DISTINCT subscriber_code)::int AS month_clients,
-        COUNT(DISTINCT address)::int AS month_addresses,
+     // Klienti/Adreses, kas iesnieguši rādījumus izvēlētajā mēnesī
+const submittedQ = await client.query(`
+  SELECT
+    COUNT(DISTINCT subscriber_code)::int AS submitted_clients,
+    COUNT(DISTINCT address)::int AS submitted_addresses
+  FROM submissions
+  WHERE to_char(date_trunc('month', submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
+`, [tz, monthEff]);
 
-        COUNT(DISTINCT CASE WHEN d = (now() AT TIME ZONE $1)::date THEN subscriber_code END)::int AS today_clients,
-        COUNT(DISTINCT CASE WHEN d = (now() AT TIME ZONE $1)::date THEN address END)::int AS today_addresses,
+const submitted = submittedQ.rows[0] || { submitted_clients: 0, submitted_addresses: 0 };
 
-        COUNT(DISTINCT CASE WHEN d = ((now() AT TIME ZONE $1)::date - 1) THEN subscriber_code END)::int AS yday_clients,
-        COUNT(DISTINCT CASE WHEN d = ((now() AT TIME ZONE $1)::date - 1) THEN address END)::int AS yday_addresses
-      FROM s
-    `, [tz, monthEff]);
+// Bāze (visi aktīvie klienti/adreses izvēlētajā mēnesī no billing snapshot)
+const baseQ = await client.query(`
+  SELECT
+    COUNT(DISTINCT subscriber_code)::int AS base_clients,
+    COUNT(DISTINCT address_raw)::int AS base_addresses
+  FROM billing_meters_snapshot
+  WHERE batch_id = $1
+    AND to_char(period_to, 'YYYY-MM') = $2
+    AND contract_status = 'Aktīvs'
+    AND meter_valid_to IS NULL
+    AND last_reading IS NOT NULL
+`, [batchId, monthEff]);
 
-    const ca = caQ.rows[0] || {
-      month_clients:0, month_addresses:0,
-      today_clients:0, today_addresses:0,
-      yday_clients:0, yday_addresses:0
-    };
+const base = baseQ.rows[0] || { base_clients: 0, base_addresses: 0 };
+
+const clients_pct = base.base_clients ? Math.round((submitted.submitted_clients * 100) / base.base_clients) : 0;
+const addr_pct    = base.base_addresses ? Math.round((submitted.submitted_addresses * 100) / base.base_addresses) : 0;
+
+const clientsAddresses = {
+  submitted_clients: submitted.submitted_clients,
+  submitted_addresses: submitted.submitted_addresses,
+  base_clients: base.base_clients,
+  base_addresses: base.base_addresses,
+  clients_pct,
+  addr_pct
+};
+   
 
     const clients_today_pct = ca.month_clients ? Math.round((ca.today_clients * 100) / ca.month_clients) : 0;
     const clients_yday_pct  = ca.month_clients ? Math.round((ca.yday_clients  * 100) / ca.month_clients) : 0;

@@ -77,31 +77,22 @@
     <div class="card">
   <h3>Klienti / Adreses</h3>
   <div class="muted">
-    Bāze šim mēnesim: klienti <b id="monthClients">—</b>, adreses <b id="monthAddrs">—</b>
+    Bāze (aktīvie): klienti <b id="baseClients">—</b>, adreses <b id="baseAddrs">—</b>
   </div>
 
   <div class="kpi" style="margin-top:10px">
     <div class="item">
-      <div class="muted">Šodien klienti</div>
-      <div class="num"><span id="todayClients">—</span> <span class="pct" id="todayClientsPct">—</span></div>
+      <div class="muted">Iesnieguši klienti (mēnesī)</div>
+      <div class="num"><span id="submittedClients">—</span> <span class="pct" id="submittedClientsPct">—</span></div>
     </div>
 
     <div class="item">
-      <div class="muted">Šodien adreses</div>
-      <div class="num"><span id="todayAddrs">—</span> <span class="pct" id="todayAddrsPct">—</span></div>
-    </div>
-
-    <div class="item">
-      <div class="muted">Vakar klienti</div>
-      <div class="num"><span id="ydayClients">—</span> <span class="pct" id="ydayClientsPct">—</span></div>
-    </div>
-
-    <div class="item">
-      <div class="muted">Vakar adreses</div>
-      <div class="num"><span id="ydayAddrs">—</span> <span class="pct" id="ydayAddrsPct">—</span></div>
+      <div class="muted">Iesniegtas adreses (mēnesī)</div>
+      <div class="num"><span id="submittedAddrs">—</span> <span class="pct" id="submittedAddrsPct">—</span></div>
     </div>
   </div>
 </div>
+
 
 
     <div class="card">
@@ -249,18 +240,14 @@
 
     const ca = j.clients_addresses || {};
 
-$('monthClients').textContent = ca.month_clients ?? 0;
-$('monthAddrs').textContent = ca.month_addresses ?? 0;
+$('baseClients').textContent = ca.base_clients ?? 0;
+$('baseAddrs').textContent = ca.base_addresses ?? 0;
 
-$('todayClients').textContent = ca.today_clients ?? 0;
-$('todayAddrs').textContent = ca.today_addresses ?? 0;
-$('ydayClients').textContent = ca.yday_clients ?? 0;
-$('ydayAddrs').textContent = ca.yday_addresses ?? 0;
+$('submittedClients').textContent = ca.submitted_clients ?? 0;
+$('submittedAddrs').textContent = ca.submitted_addresses ?? 0;
 
-$('todayClientsPct').textContent = (ca.clients_today_pct ?? 0) + '%';
-$('todayAddrsPct').textContent = (ca.addr_today_pct ?? 0) + '%';
-$('ydayClientsPct').textContent = (ca.clients_yday_pct ?? 0) + '%';
-$('ydayAddrsPct').textContent = (ca.addr_yday_pct ?? 0) + '%';
+$('submittedClientsPct').textContent = (ca.clients_pct ?? 0) + '%';
+$('submittedAddrsPct').textContent = (ca.addr_pct ?? 0) + '%';
 
 
     $('anZero').textContent = j.anomalies?.zero_consumption ?? 0;
