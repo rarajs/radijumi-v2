@@ -21,6 +21,13 @@ const { DateTime } = require('luxon');
 
 const app = express();
 
+console.log('[BOOT] starting', new Date().toISOString());
+console.log('[BOOT] NODE', process.version);
+console.log('[BOOT] has DATABASE_URL?', !!process.env.DATABASE_URL);
+console.log('[BOOT] has INVITE_TOKEN_SECRET?', !!process.env.INVITE_TOKEN_SECRET);
+console.log('[BOOT] PORT env?', process.env.PORT);
+
+
 /* ===================== ENV ===================== */
 const PORT = process.env.PORT || 8080;
 const DATABASE_URL = process.env.DATABASE_URL;
