@@ -133,6 +133,15 @@ async function ensureSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS billing_meters_snapshot_batch_sub_idx ON billing_meters_snapshot(batch_id, subscriber_code);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS billing_meters_snapshot_batch_contract_idx ON billing_meters_snapshot(batch_id, contract_nr);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS billing_meters_snapshot_batch_meter_idx ON billing_meters_snapshot(batch_id, contract_nr, meter_serial);`);
+  // NEW (billing export 2026+): contract status + meter validity
+  await pool.query(`ALTER TABLE billing_meters_snapshot ADD COLUMN IF NOT EXISTS contract_status text;`);
+  await pool.query(`ALTER TABLE billing_meters_snapshot ADD COLUMN IF NOT EXISTS meter_valid_from date;`);
+  await pool.query(`ALTER TABLE billing_meters_snapshot ADD COLUMN IF NOT EXISTS meter_valid_to date;`);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS billing_snapshot_active_idx
+    ON billing_meters_snapshot(batch_id, subscriber_code, contract_status, meter_valid_to)
+  `);
 
   // history per meter: monthly m3 per (batch + contract + meter + month)
   await pool.query(`
@@ -2288,7 +2297,7 @@ async function processUnifiedImport(jobId, file, filename) {
     if (!isCsv && !isXlsx) throw new Error('Unsupported file type (allowed: .csv, .xlsx)');
 
     // required columns (stable)
-    const COL = {
+        const COL = {
       sub: 'NĪPLigPap.NĪPLīg.Ab.Kods',
       contract: 'NĪPLigPap.NĪPLīg.Numurs',
       address: 'NĪPLigPap.NĪO.Adrese',
@@ -2300,11 +2309,13 @@ async function processUnifiedImport(jobId, file, filename) {
       reading: 'Rādījums',
       prevReading: 'Pēdējais rādījums',
       qty: 'Daudzums iev.',
-      stage: 'Stadija',
       qtyType: 'Daudzuma tips',
       email: 'NĪPLigPap.NĪPLīg.Ab.E-pasts',
-      nextVerif: 'SkaE.Nāk.verifikācijas datums'
+      contractStatus: 'NĪPLigPap.NĪPLīg.Statuss',
+      meterValidFrom: 'SkaE.Spēkā no',
+      meterValidTo: 'SkaE.Spēkā līdz'
     };
+
 
     const totalRows = isCsv ? Math.max(0, countNewlines(file.buffer) - 1) : null;
     job.totalRows = totalRows || null;
@@ -2341,7 +2352,11 @@ async function processUnifiedImport(jobId, file, filename) {
           idx[k] = i;
         }
         // verify required indices
-        const requiredKeys = ['sub','contract','address','meter','pTo','reading','prevReading','qty','email','pFrom'];
+        const requiredKeys = [
+          'sub','contract','address','meter','meterType',
+          'pFrom','pTo','reading','prevReading','qty','qtyType',
+          'email','contractStatus','meterValidFrom','meterValidTo'
+        ];
         const missing = requiredKeys.filter(k => idx[k] == null || idx[k] < 0);
         if (missing.length) throw new Error('XLSX: missing required columns: ' + missing.map(k=>COL[k]).join(', '));
         let rowNum = 1;
@@ -2428,79 +2443,51 @@ async function processUnifiedImport(jobId, file, filename) {
         subEmailCounts.set(subscriber, se);
       }
 
-      // snapshot candidates
+            // NEW: status/validity from billing export
+      const contractStatus = String(row[COL.contractStatus] ?? '').trim();
+      const meterValidFromIso = excelDateToISO(row[COL.meterValidFrom]);
+      const meterValidToIso = excelDateToISO(row[COL.meterValidTo]);
+
+      // FILTER: only active contract + meter still in force (Spēkā līdz is empty)
+      if (contractStatus !== 'Aktīvs') continue;
+      if (meterValidToIso) continue;
+
+      // snapshot: keep latest row per (contract + meter) by period_to
       const key = contract + '||' + meterNo;
       const meterType = String(row[COL.meterType] ?? '').trim() || null;
-      const stage = String(row[COL.stage] ?? '').trim() || null;
       const qtyType = String(row[COL.qtyType] ?? '').trim() || null;
-      const nextVerif = excelDateToISO(row[COL.nextVerif]);
 
-      let rec = meters.get(key);
-      if (!rec) {
-        rec = { metaIso: null, meta: null, bestPrevIso: null, bestPrev: null, fallbackPrev: null, meterType: null, stage: null, qtyType: null, nextVerif: null, bestPrevPeriodFrom: null, bestPrevPeriodTo: null };
-        meters.set(key, rec);
+      const existing = meters.get(key);
+      const shouldReplace = !existing || (existing.period_to && pToIso && compareIsoDate(pToIso, existing.period_to) > 0);
+
+      if (shouldReplace) {
+        meters.set(key, {
+          subscriber,
+          contract,
+          meterNo,
+          address,
+          clientName,
+          email,
+          meterType,
+          period_from: pFromIso || null,
+          period_to: pToIso || null,
+          last_reading: Number.isFinite(prevReadingNum) ? prevReadingNum : null,
+          reading: Number.isFinite(readingNum) ? readingNum : null,
+          consumption: Number.isFinite(qtyNum) ? qtyNum : 0,
+          qtyType,
+          contractStatus,
+          meterValidFrom: meterValidFromIso || null,
+          meterValidTo: meterValidToIso || null
+        });
       }
 
-      // meta row: newest period_to overall
-      if (!rec.metaIso || compareIsoDate(pToIso, rec.metaIso) > 0) {
-        rec.metaIso = pToIso;
-        rec.meta = { subscriber, contract, meterNo, address, clientName, email };
-        rec.meterType = meterType;
-        rec.stage = stage;
-        rec.qtyType = qtyType;
-        rec.nextVerif = nextVerif;
-        rec.fallbackPrev = Number.isFinite(prevReadingNum) ? prevReadingNum : rec.fallbackPrev;
-        rec.metaPeriodFrom = pFromIso;
-        rec.metaPeriodTo = pToIso;
-      }
-
-      // prevMonth candidate
-      if (pToMonth === prevMonth) {
-        const betterByDate = (!rec.bestPrevIso || compareIsoDate(pToIso, rec.bestPrevIso) > 0);
-        const hasReading = Number.isFinite(readingNum);
-        const curHasReading = rec.bestPrev && Number.isFinite(rec.bestPrev.reading);
-        let choose = false;
-        if (betterByDate) choose = true;
-        else if (pToIso === rec.bestPrevIso) {
-          if (hasReading && !curHasReading) choose = true;
-          else if (hasReading && curHasReading && readingNum > rec.bestPrev.reading) choose = true;
-        }
-        if (choose) {
-          rec.bestPrevIso = pToIso;
-          rec.bestPrev = { reading: hasReading ? readingNum : null };
-          rec.bestPrevPeriodFrom = pFromIso;
-          rec.bestPrevPeriodTo = pToIso;
-          // update some meta as well in case prevMonth row has better strings
-          rec.stage = stage || rec.stage;
-          rec.qtyType = qtyType || rec.qtyType;
-        }
-      }
-    }
 
     job.phase = 'DB import';
     job.percent = 82;
 
-    // Build snapshot rows
-    const snapshotRows = [];
-    for (const [key, rec] of meters.entries()) {
-      if (!rec.meta) continue;
-      const { subscriber, contract, meterNo, address, clientName, email } = rec.meta;
+        // Build snapshot rows (already filtered + latest per meter)
+    const snapshotRows = Array.from(meters.values());
 
-      const prevReading = (rec.bestPrev && Number.isFinite(rec.bestPrev.reading)) ? rec.bestPrev.reading : rec.fallbackPrev;
-      const basePeriodFrom = rec.bestPrevPeriodFrom || rec.metaPeriodFrom || null;
-      const basePeriodTo = rec.bestPrevPeriodTo || rec.metaPeriodTo || null;
-
-      snapshotRows.push({
-        subscriber, contract, meterNo, address, clientName, email,
-        meterType: rec.meterType,
-        periodFrom: basePeriodFrom,
-        periodTo: basePeriodTo,
-        nextVerif: rec.nextVerif,
-        lastReading: Number.isFinite(prevReading) ? prevReading : null,
-        stage: rec.stage,
-        qtyType: rec.qtyType
-      });
-    }
 
     // choose email for each contract, fallback from subscriber if missing
     const bestEmail = (m) => {
@@ -2545,7 +2532,7 @@ async function processUnifiedImport(jobId, file, filename) {
       const batchId = batchIns.rows[0].id;
 
       // snapshot insert
-      const snapSql = `
+            const snapSql = `
         INSERT INTO billing_meters_snapshot (
           batch_id,
           meter_type,
@@ -2563,32 +2550,39 @@ async function processUnifiedImport(jobId, file, filename) {
           reading,
           stage,
           notes,
-          qty_type
+          qty_type,
+          contract_status,
+          meter_valid_from,
+          meter_valid_to
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
       `;
 
+
       for (const r of snapshotRows) {
-        await client.query(snapSql, [
+                await client.query(snapSql, [
           batchId,
           r.meterType || null,
           r.contract,
           r.clientName || null,
           r.subscriber,
           r.address || null,
-          r.periodFrom || null,
-          r.periodTo || null,
+          r.period_from || null,
+          r.period_to || null,
           r.meterNo || null,
-          r.nextVerif || null,
-          null,
-          r.lastReading,
-          null,
-          null,
-          r.stage || null,
-          null,
-          r.qtyType || null
+          null,   // next_verif_date (vairs nav eksportā)
+          null,   // last_reading_date
+          r.last_reading,
+          r.consumption == null ? null : r.consumption,
+          r.reading == null ? null : r.reading,
+          null,   // stage
+          null,   // notes
+          r.qtyType || null,
+          r.contractStatus || null,
+          r.meterValidFrom || null,
+          r.meterValidTo || null
         ]);
-      }
+
 
       // history insert (batch-scoped)
       const histSql = `
