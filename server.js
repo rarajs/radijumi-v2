@@ -712,28 +712,36 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
 
     // first: check if subscriber+contract exists in ACTIVE month
     const okMatch = await client.query(`
-      SELECT 1
-      FROM billing_meters_snapshot
-      WHERE batch_id=$1
-        AND subscriber_code=$2
-        AND contract_nr=$3
-        AND to_char(period_to, 'YYYY-MM') = $4
-        AND last_reading IS NOT NULL
-      LIMIT 1
-    `, [batchId, subscriber, contract, activeMonth]);
+  SELECT 1
+  FROM billing_meters_snapshot
+  WHERE batch_id=$1
+    AND subscriber_code=$2
+    AND contract_nr=$3
+    AND contract_status='Aktīvs'
+    AND meter_valid_to IS NULL
+    AND last_reading IS NOT NULL
+  LIMIT 1
+`, [batchId, subscriber, contract]);
 
     if (!okMatch.rowCount) return res.json({ ok:true, found:false });
 
     // then: return ALL ACTIVE meters for subscriber (in ACTIVE month)
     const q = await client.query(`
-      SELECT contract_nr, address_raw, meter_serial, last_reading, client_name, period_to
-      FROM billing_meters_snapshot
-      WHERE batch_id=$1
-        AND subscriber_code=$2
-        AND to_char(period_to, 'YYYY-MM') = $3
-        AND last_reading IS NOT NULL
-      ORDER BY contract_nr, address_raw, meter_serial
-    `, [batchId, subscriber, activeMonth]);
+  WITH latest AS (
+    SELECT DISTINCT ON (contract_nr, meter_serial)
+      contract_nr, address_raw, meter_serial, last_reading, client_name, period_to
+    FROM billing_meters_snapshot
+    WHERE batch_id=$1
+      AND subscriber_code=$2
+      AND contract_status='Aktīvs'
+      AND meter_valid_to IS NULL
+      AND last_reading IS NOT NULL
+    ORDER BY contract_nr, meter_serial, period_to DESC NULLS LAST
+  )
+  SELECT *
+  FROM latest
+  ORDER BY contract_nr, address_raw, meter_serial
+`, [batchId, subscriber]);
 
     if (!q.rowCount) return res.json({ ok:true, found:false });
 
@@ -885,11 +893,21 @@ app.get('/api/invite/resolve', lookupLimiter, async (req, res) => {
     if (!batchId) return res.status(503).json({ ok:false, error:'Billing data not uploaded' });
 
     const q = await client.query(`
-      SELECT contract_nr, address_raw, meter_serial, last_reading, client_name
-      FROM billing_meters_snapshot
-      WHERE batch_id=$1 AND subscriber_code=$2
-      ORDER BY contract_nr, address_raw, meter_serial
-    `, [batchId, subscriber]);
+  WITH latest AS (
+    SELECT DISTINCT ON (contract_nr, meter_serial)
+      contract_nr, address_raw, meter_serial, last_reading, client_name, period_to
+    FROM billing_meters_snapshot
+    WHERE batch_id=$1
+      AND subscriber_code=$2
+      AND contract_status='Aktīvs'
+      AND meter_valid_to IS NULL
+      AND last_reading IS NOT NULL
+    ORDER BY contract_nr, meter_serial, period_to DESC NULLS LAST
+  )
+  SELECT contract_nr, address_raw, meter_serial, last_reading, client_name
+  FROM latest
+  ORDER BY contract_nr, address_raw, meter_serial
+`, [batchId, subscriber]);
 
     if (!q.rowCount) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
 
