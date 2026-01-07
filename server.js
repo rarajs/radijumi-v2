@@ -3221,6 +3221,7 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
     client.release();
   }
 });
+}
 
 /* ===================== start ===================== */
 (async () => {
@@ -3239,3 +3240,4 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
     process.exit(1);
   }
 })();
+}
