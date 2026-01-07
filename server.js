@@ -3108,12 +3108,12 @@ app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
     res.end(pageShell('Invites OK', `
       <h1>OK — uzaicinājumi sagatavoti</h1>
       <div class="muted">Mēnesis: <b>${month}</b></div>
-      <div class="muted">Active mēnesis (fallback): <b>${activeMonth}</b></div>
+      <div class="muted">Filtrs: <b>Aktīvs līgums + skaitītājs spēkā</b></div>
       <div class="muted">Unikālie inviti: <b>${created}</b></div>
       <div class="muted">E-pastu skaits (saņēmēji): <b>${totalEmails}</b></div>
       <div class="muted">Inviti bez e-pasta: <b>${noEmailSubs}</b></div>
       <script>
-        alert("Invite ģenerēšana pabeigta.\\nActive mēnesis: ${activeMonth}\\nUnikālie inviti: ${created}\\nE-pastu skaits: ${totalEmails}\\nBez e-pasta: ${noEmailSubs}");
+        alert("Invite ģenerēšana pabeigta.\\nUnikālie inviti: ${created}\\nE-pastu skaits: ${totalEmails}\\nBez e-pasta: ${noEmailSubs}");
       </script>
       <div class="muted" style="margin-top:10px"><a href="/admin/invites">← atpakaļ</a></div>
     `));
@@ -3149,13 +3149,14 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
     let contractRows = [];
     if (batchId && subs.length) {
       const q = await client.query(`
-        SELECT subscriber_code, contract_nr
-        FROM billing_meters_snapshot
-        WHERE batch_id=$1
-          AND subscriber_code = ANY($2::text[])
-          AND substring(period_to from 1 for 7) = $3
-          AND last_reading IS NOT NULL
-      `, [batchId, subs, activeMonth]);
+  SELECT DISTINCT subscriber_code, contract_nr
+  FROM billing_meters_snapshot
+  WHERE batch_id=$1
+    AND subscriber_code = ANY($2::text[])
+    AND contract_status='Aktīvs'
+    AND meter_valid_to IS NULL
+    AND last_reading IS NOT NULL
+`, [batchId, subs]);
       contractRows = q.rows;
     }
 
