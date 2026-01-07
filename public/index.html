@@ -4,6 +4,20 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Ūdens skaitītāju rādījumu iesniegšana</title>
+  <script>
+  (function () {
+    var p = (location.pathname || "");
+    if (p.indexOf("/i/") === 0) {
+      // uzliekam klasi UZREIZ, pirms lapa sāk zīmēties
+      document.documentElement.classList.add("invite-mode");
+    }
+  })();
+</script>
+
+<style>
+  /* kritiski: paslēpj auth bloku jau pirms pārējais CSS/JS ielādējas */
+  html.invite-mode #authBlock { display: none !important; }
+</style>
 
   <style>
     :root{
