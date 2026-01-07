@@ -2761,55 +2761,54 @@ async function exportCsv(res, req) {
     'submitted_at_utc','meter_no','previous_reading','reading','consumption'
   ]));
 
-  const client = await pool.connect();
-  try {
-    let sql = `
-      SELECT
-        s.id AS submission_id,
-        s.client_submission_id,
-        s.subscriber_code,
-        COALESCE(l.contract_nr, s.contract_nr) AS contract_nr,
-        s.address,
-        (s.submitted_at AT TIME ZONE 'UTC') AS submitted_at_utc,
-        l.meter_no,
-        l.previous_reading,
-        l.reading,
-        l.consumption
-      FROM submissions s
-      JOIN submission_lines l ON l.submission_id = s.id
-    `;
+const client = await pool.connect();
+try {
+  let sql = `
+    SELECT
+      s.id AS submission_id,
+      s.client_submission_id,
+      s.subscriber_code,
+      COALESCE(l.contract_nr, s.contract_nr) AS contract_nr,
+      s.address,
+      (s.submitted_at AT TIME ZONE 'UTC') AS submitted_at_utc,
+      l.meter_no,
+      l.previous_reading,
+      l.reading,
+      l.consumption
+    FROM submissions s
+    JOIN submission_lines l ON l.submission_id = s.id
+  `;
 
-    const params = [];
-    if (/^\d{4}-\d{2}$/.test(month)) {
-      sql += ` WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2`;
-      params.push(TZ, month);
-    }
-
-    sql += ` ORDER BY s.submitted_at DESC, s.id DESC, l.id ASC`;
-
-    const result = await client.query(sql, params);
-    for (const r of result.rows) {
-      res.write(toCSVRow([
-        r.submission_id,
-        r.client_submission_id,
-        r.subscriber_code,
-        r.contract_nr || '',
-        r.address || '',
-        r.submitted_at_utc instanceof Date ? r.submitted_at_utc.toISOString() : String(r.submitted_at_utc),
-        r.meter_no,
-        r.previous_reading == null ? '' : r.previous_reading,
-        r.reading,
-        r.consumption == null ? '' : r.consumption
-      ]));
-    }
-    res.end();
-  } catch (err) {
-    console.error('export error', err);
-    if (!res.headersSent) res.status(500);
-    res.end('Export failed');
-  } finally {
-    client.release();
+  const params = [];
+  if (/^\d{4}-\d{2}$/.test(month)) {
+    sql += ` WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2`;
+    params.push(TZ, month);
   }
+
+  sql += ` ORDER BY s.submitted_at DESC, s.id DESC, l.id ASC`;
+
+  const result = await client.query(sql, params);
+  for (const r of result.rows) {
+    res.write(toCSVRow([
+      r.submission_id,
+      r.client_submission_id,
+      r.subscriber_code,
+      r.contract_nr || '',
+      r.address || '',
+      r.submitted_at_utc instanceof Date ? r.submitted_at_utc.toISOString() : String(r.submitted_at_utc),
+      r.meter_no,
+      r.previous_reading == null ? '' : r.previous_reading,
+      r.reading,
+      r.consumption == null ? '' : r.consumption
+    ]));
+  }
+  res.end();
+} catch (err) {
+  console.error('export error', err);
+  if (!res.headersSent) res.status(500);
+  res.end('Export failed');
+} finally {
+  client.release();
 }
 
 app.get('/admin/export.csv', requireBasicAuth, async (req, res) => {
