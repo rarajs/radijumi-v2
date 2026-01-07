@@ -3250,32 +3250,45 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
 }
 
 /* ===================== start ===================== */
+
+// always start listening FIRST (so Railway doesn't 502)
+let INIT_READY = false;
+let INIT_ERROR = null;
+
+app.get('/healthz', (req, res) => {
+  if (INIT_READY) return res.status(200).json({ ok: true });
+  return res.status(503).json({ ok: false, error: INIT_ERROR });
+});
+
+app.listen(PORT, () => {
+  console.log(`server listening on :${PORT} (enforceWindow=${ENFORCE_WINDOW}, tz=${TZ})`);
+});
+
+// init in background (non-blocking)
 (async () => {
   try {
-    console.log('[BOOT] step ensureSchema...');
+    console.log('[INIT] ensureSchema...');
     await ensureSchema();
-    console.log('[BOOT] step ensureSchema OK');
+    console.log('[INIT] ensureSchema OK');
 
-    console.log('[BOOT] step enforceTechRetention...');
+    console.log('[INIT] enforceTechRetention...');
     enforceTechRetention();
     setInterval(enforceTechRetention, 24 * 60 * 60 * 1000);
-    console.log('[BOOT] step enforceTechRetention OK');
+    console.log('[INIT] enforceTechRetention OK');
 
-    console.log('[BOOT] step startPgListener...');
+    console.log('[INIT] startPgListener...');
     await startPgListener();
-    console.log('[BOOT] step startPgListener OK');
+    console.log('[INIT] startPgListener OK');
 
-    console.log('[BOOT] step loadAddressesIfNeeded...');
+    console.log('[INIT] loadAddressesIfNeeded...');
     loadAddressesIfNeeded();
-    console.log('[BOOT] step loadAddressesIfNeeded OK');
+    console.log('[INIT] loadAddressesIfNeeded OK');
 
-    console.log('[BOOT] step listen...');
-    app.listen(PORT, () => {
-      console.log(`server listening on :${PORT} (enforceWindow=${ENFORCE_WINDOW}, tz=${TZ})`);
-    });
+    INIT_READY = true;
+    console.log('[INIT] READY');
   } catch (e) {
-    console.error('FATAL: failed to start', e);
-    process.exit(1);
+    INIT_ERROR = String(e?.message || e);
+    console.error('[INIT] FAILED', e);
   }
 })();
 }
