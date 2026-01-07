@@ -117,14 +117,13 @@
     <div class="row" style="justify-content:space-between;">
       <div>
         <h3 style="margin:0;">Karte</h3>
-        <div class="muted">Zaļie punkti no iesniegumiem. “Visi” = no 25. datuma 00:00.</div>
+        <div class="muted">Zaļie punkti no iesniegumiem. “Visi” = viss tekošais mēnesis.</div>
       </div>
       <div class="row">
         <span class="muted">Skats:</span>
         <select id="mapRange">
-          <option value="all">Visi (no 25. datuma)</option>
+          <option value="all">Viss tekošais mēnesis</option>
           <option value="today" selected>Šodiena</option>
-          <option value="hour">Pēdējā stunda</option>
         </select>
         <span class="badge" id="mapCounts">—</span>
       </div>
@@ -298,9 +297,7 @@ $('submittedAddrsPct').textContent = (ca.addr_pct ?? 0) + '%';
   (async ()=>{
     await loadMonths();
     await reloadAll();
-    setInterval(loadAnalytics, 30000);
-    setInterval(loadMap, 15000);
-  })();
+   })();
 </script>
 </body>
 </html>

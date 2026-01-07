@@ -1476,18 +1476,16 @@ app.get('/admin/analytics', requireBasicAuth, (req, res) => {
 
 
 app.get('/admin/api/map_points', requireBasicAuth, async (req, res) => {
-  // Map filter: all (from 25th 00:00 of current month), today, hour
-  const range = String(req.query.range || 'today').trim().toLowerCase(); // all|today|hour
+  // Map filter: all (current month), today
+  const range = String(req.query.range || 'today').trim().toLowerCase(); // all|today
   const now = DateTime.now().setZone(TZ);
 
-  // submission window start: 25th 00:00 of current month (process window)
-  const windowStart = now.startOf('month').plus({ days: 24 }).startOf('day');
+  const monthStart = now.startOf('month'); // 1.dat 00:00
   const todayStart = now.startOf('day');
-  const hourStart = now.minus({ hours: 1 });
 
   let timeMin = todayStart; // default 'today'
-  if (range === 'all') timeMin = windowStart;
-  else if (range === 'hour') timeMin = hourStart;
+  if (range === 'all') timeMin = monthStart;
+
 
   const client = await pool.connect();
   try {
