@@ -1609,11 +1609,11 @@ const baseQ = await client.query(`
     COUNT(DISTINCT address_raw)::int AS base_addresses
   FROM billing_meters_snapshot
   WHERE batch_id = $1
-    AND to_char(period_to, 'YYYY-MM') = $2
     AND contract_status = 'Aktīvs'
     AND meter_valid_to IS NULL
     AND last_reading IS NOT NULL
-`, [batchId, monthEff]);
+`, [batchId]);
+
 
 const base = baseQ.rows[0] || { base_clients: 0, base_addresses: 0 };
 
