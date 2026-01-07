@@ -36,6 +36,7 @@
     th{color:var(--muted);text-align:left;font-weight:600}
     .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
     .badge{font-size:12px;color:var(--muted)}
+	.pct{font-size:12px;color:var(--muted);font-weight:700;margin-left:6px}
     @media (max-width:900px){.grid2{grid-template-columns:1fr}}
   </style>
 </head>
@@ -74,26 +75,34 @@
   <!-- METRICS -->
   <div class="grid2 full">
     <div class="card">
-      <h3>Šodien / vakar</h3>
-      <div class="kpi">
-        <div class="item">
-          <div class="muted">Šodien iesniegumi</div>
-          <div class="num" id="todaySub">—</div>
-        </div>
-        <div class="item">
-          <div class="muted">Šodien abonenti</div>
-          <div class="num" id="todayUsers">—</div>
-        </div>
-        <div class="item">
-          <div class="muted">Vakar iesniegumi</div>
-          <div class="num" id="ydaySub">—</div>
-        </div>
-        <div class="item">
-          <div class="muted">Vakar abonenti</div>
-          <div class="num" id="ydayUsers">—</div>
-        </div>
-      </div>
+  <h3>Klienti / Adreses</h3>
+  <div class="muted">
+    Bāze šim mēnesim: klienti <b id="monthClients">—</b>, adreses <b id="monthAddrs">—</b>
+  </div>
+
+  <div class="kpi" style="margin-top:10px">
+    <div class="item">
+      <div class="muted">Šodien klienti</div>
+      <div class="num"><span id="todayClients">—</span> <span class="pct" id="todayClientsPct">—</span></div>
     </div>
+
+    <div class="item">
+      <div class="muted">Šodien adreses</div>
+      <div class="num"><span id="todayAddrs">—</span> <span class="pct" id="todayAddrsPct">—</span></div>
+    </div>
+
+    <div class="item">
+      <div class="muted">Vakar klienti</div>
+      <div class="num"><span id="ydayClients">—</span> <span class="pct" id="ydayClientsPct">—</span></div>
+    </div>
+
+    <div class="item">
+      <div class="muted">Vakar adreses</div>
+      <div class="num"><span id="ydayAddrs">—</span> <span class="pct" id="ydayAddrsPct">—</span></div>
+    </div>
+  </div>
+</div>
+
 
     <div class="card">
       <h3>Datu anomālijas panelis</h3>
@@ -238,10 +247,21 @@
     $('importInfo').textContent = j.last_import_at ? ('Ielādēts: ' + fmtRiga(j.last_import_at)) : 'Nav importa datu';
     $('tokenCount').textContent = (j.tokens ?? 0);
 
-    $('todaySub').textContent = j.today?.today_submissions ?? 0;
-    $('todayUsers').textContent = j.today?.today_subs ?? 0;
-    $('ydaySub').textContent = j.today?.yday_submissions ?? 0;
-    $('ydayUsers').textContent = j.today?.yday_subs ?? 0;
+    const ca = j.clients_addresses || {};
+
+$('monthClients').textContent = ca.month_clients ?? 0;
+$('monthAddrs').textContent = ca.month_addresses ?? 0;
+
+$('todayClients').textContent = ca.today_clients ?? 0;
+$('todayAddrs').textContent = ca.today_addresses ?? 0;
+$('ydayClients').textContent = ca.yday_clients ?? 0;
+$('ydayAddrs').textContent = ca.yday_addresses ?? 0;
+
+$('todayClientsPct').textContent = (ca.clients_today_pct ?? 0) + '%';
+$('todayAddrsPct').textContent = (ca.addr_today_pct ?? 0) + '%';
+$('ydayClientsPct').textContent = (ca.clients_yday_pct ?? 0) + '%';
+$('ydayAddrsPct').textContent = (ca.addr_yday_pct ?? 0) + '%';
+
 
     $('anZero').textContent = j.anomalies?.zero_consumption ?? 0;
     $('anNeg').textContent = j.anomalies?.negative_consumption ?? 0;
