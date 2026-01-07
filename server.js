@@ -1480,12 +1480,14 @@ app.get('/admin/api/map_points', requireBasicAuth, async (req, res) => {
   const range = String(req.query.range || 'today').trim().toLowerCase(); // all|today
   const now = DateTime.now().setZone(TZ);
 
-  const monthStart = now.startOf('month'); // 1.dat 00:00
+  const monthStart = now.startOf('month');
   const todayStart = now.startOf('day');
 
-  let timeMin = todayStart; // default 'today'
+  let timeMin = todayStart;
   if (range === 'all') timeMin = monthStart;
 
+  // ensure address index is loaded (safe if already loaded)
+  try { loadAddressesIfNeeded(); } catch (e) { console.warn('loadAddressesIfNeeded failed', e); }
 
   const client = await pool.connect();
   try {
@@ -1510,7 +1512,12 @@ app.get('/admin/api/map_points', requireBasicAuth, async (req, res) => {
       const addr = String(r.address || '').trim();
       if (!addr) continue;
 
-      const g = geoForAddress(addr);
+      let g = null;
+      try { g = geoForAddress(addr); } catch (e) {
+        console.warn('geoForAddress failed', addr, e);
+        g = null;
+      }
+
       if (g && Number.isFinite(g.lat) && Number.isFinite(g.lon)) {
         points.push({
           address: addr,
@@ -1529,7 +1536,13 @@ app.get('/admin/api/map_points', requireBasicAuth, async (req, res) => {
       }
     }
 
-    res.json({ ok: true, range, window_start: windowStart.toISO(), points, missing });
+    res.json({
+      ok: true,
+      range,
+      time_min: timeMin.toISO(),
+      points,
+      missing
+    });
   } catch (e) {
     console.error('map_points api error', e);
     res.status(500).json({ ok: false, error: 'Internal error' });
@@ -1537,6 +1550,7 @@ app.get('/admin/api/map_points', requireBasicAuth, async (req, res) => {
     client.release();
   }
 });
+
 
 
 // ===== Dashboard analytics APIs =====
