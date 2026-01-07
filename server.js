@@ -2665,7 +2665,7 @@ async function processUnifiedImport(jobId, file, filename) {
     } finally {
       client.release();
     }
-
+  }
   } catch (e) {
     job.status = 'error';
     job.phase = 'Error';
