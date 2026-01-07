@@ -1616,21 +1616,6 @@ const clientsAddresses = {
   addr_pct
 };
    
-
-    const clients_today_pct = ca.month_clients ? Math.round((ca.today_clients * 100) / ca.month_clients) : 0;
-    const clients_yday_pct  = ca.month_clients ? Math.round((ca.yday_clients  * 100) / ca.month_clients) : 0;
-    const addr_today_pct    = ca.month_addresses ? Math.round((ca.today_addresses * 100) / ca.month_addresses) : 0;
-    const addr_yday_pct     = ca.month_addresses ? Math.round((ca.yday_addresses  * 100) / ca.month_addresses) : 0;
-
-    const clientsAddresses = {
-      ...ca,
-      clients_today_pct,
-      clients_yday_pct,
-      addr_today_pct,
-      addr_yday_pct
-    };
-
-
     // Anomalies for selected month (based on submission_lines)
     const an = await client.query(`
       SELECT
