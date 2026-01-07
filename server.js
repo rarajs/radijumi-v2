@@ -21,13 +21,6 @@ const { DateTime } = require('luxon');
 
 const app = express();
 
-console.log('[BOOT] starting', new Date().toISOString());
-console.log('[BOOT] NODE', process.version);
-console.log('[BOOT] has DATABASE_URL?', !!process.env.DATABASE_URL);
-console.log('[BOOT] has INVITE_TOKEN_SECRET?', !!process.env.INVITE_TOKEN_SECRET);
-console.log('[BOOT] PORT env?', process.env.PORT);
-
-
 /* ===================== ENV ===================== */
 const PORT = process.env.PORT || 8080;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -48,16 +41,14 @@ const RATE_LIMIT_ADDR_PER_MIN = parseInt(process.env.RATE_LIMIT_ADDR_PER_MIN || 
 const RATE_LIMIT_LOOKUP_PER_MIN = parseInt(process.env.RATE_LIMIT_LOOKUP_PER_MIN || '120', 10);
 
 if (!DATABASE_URL) {
-  console.error('FATAL: DATABASE_URL is missing');
-  process.exit(1);
+  console.error('WARN: DATABASE_URL is missing (service will start but DB features will be unavailable)');
 }
-
 /* ===================== DB ===================== */
-const pool = new Pool({ connectionString: DATABASE_URL });
-
+const pool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
 /* ===================== schema ensure ===================== */
 async function ensureSchema() {
-  // submissions
+  if (!pool) return;
+// submissions
   await pool.query(`
     CREATE TABLE IF NOT EXISTS submissions (
       id bigserial PRIMARY KEY,
@@ -144,11 +135,8 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE billing_meters_snapshot ADD COLUMN IF NOT EXISTS contract_status text;`);
   await pool.query(`ALTER TABLE billing_meters_snapshot ADD COLUMN IF NOT EXISTS meter_valid_from date;`);
   await pool.query(`ALTER TABLE billing_meters_snapshot ADD COLUMN IF NOT EXISTS meter_valid_to date;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS billing_snapshot_active_idx ON billing_meters_snapshot(batch_id, subscriber_code, contract_status, meter_valid_to);`);
 
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS billing_snapshot_active_idx
-    ON billing_meters_snapshot(batch_id, subscriber_code, contract_status, meter_valid_to)
-  `);
 
   // history per meter: monthly m3 per (batch + contract + meter + month)
   await pool.query(`
@@ -290,6 +278,11 @@ function enforceSameOrigin(req, res) {
   }
   return res.status(403).json({ ok:false, error:'Missing origin/referer' });
 }
+function requireDbJson(res) {
+  if (!pool) { res.status(503).json({ ok:false, error:'DB not configured' }); return false; }
+  return true;
+}
+
 function enforceSameOriginSoft(req, res) {
   if (!PUBLIC_ORIGIN) return null;
   const { origin, referer } = getOriginOrReferer(req);
@@ -297,51 +290,7 @@ function enforceSameOriginSoft(req, res) {
   if (referer && !referer.startsWith(PUBLIC_ORIGIN + '/')) return res.status(403).json({ ok:false, error:'Forbidden referer' });
   return null;
 }
-function prevMonthYYYYMM() {
-  return DateTime.now().setZone(TZ).startOf('month').minus({ months: 1 }).toFormat('yyyy-MM');
-}
-
-async function getActiveMonthForLatestBatch(client) {
-  const batchId = await getLatestBillingBatchId(client);
-  if (!batchId) return { batchId: null, activeMonth: prevMonthYYYYMM() };
-
-  // mēneši no period_to (text 'YYYY-MM-DD')
-  const r = await client.query(`
-    SELECT DISTINCT to_char(period_to, 'YYYY-MM') AS m
-    FROM billing_meters_snapshot
-    WHERE batch_id=$1
-      AND period_to IS NOT NULL
-    ORDER BY m
-
-  `, [batchId]);
-
-  const target = prevMonthYYYYMM();
-  const months = r.rows.map(x => x.m).filter(Boolean);
-
-  if (months.includes(target)) return { batchId, activeMonth: target };
-  if (!months.length) return { batchId, activeMonth: target };
-
-  return { batchId, activeMonth: months[months.length - 1] }; // fallback = pēdējais pieejamais
-}
-async function getActiveMonthForSubscriber(client, batchId, subscriber) {
-  const target = prevMonthYYYYMM();
-
-  const r = await client.query(`
-    SELECT DISTINCT to_char(period_to, 'YYYY-MM') AS m
-    FROM billing_meters_snapshot
-    WHERE batch_id=$1
-      AND subscriber_code=$2
-      AND period_to IS NOT NULL
-    ORDER BY m
-  `, [batchId, subscriber]);
-
-  const months = r.rows.map(x => x.m).filter(Boolean);
-
-  if (months.includes(target)) return target;
-  if (!months.length) return target;
-  return months[months.length - 1]; // fallback = pēdējais pieejamais šim abonentam
-}
-
+// Active-month fallback helpers removed (we use contract_status + meter_valid_to from billing export)
 
 /* CSV injection guard */
 function csvSanitize(value) {
@@ -571,21 +520,18 @@ async function getLatestBillingBatchId(client) {
 }
 async function getLatestBillingBatchInfo() {
   const client = await pool.connect();
-try {
-  await client.query('BEGIN');
-
-  // ... ŠEIT paliek visa importa loģika (inserti, mapošana, utt.) ...
-
-  await client.query('COMMIT');
-
-  // ... ŠEIT paliek job.report / job.reportHtml / job.status='done' ...
-} catch (e) {
-  try { await client.query('ROLLBACK'); } catch {}
-  throw e;
-} finally {
-  client.release();
+  try {
+    const r = await client.query(`
+      SELECT id, source_filename, uploaded_at, target_month, prev_month
+      FROM billing_import_batches
+      ORDER BY uploaded_at DESC
+      LIMIT 1
+    `);
+    return r.rowCount ? r.rows[0] : null;
+  } finally {
+    client.release();
+  }
 }
-
 async function listAvailableMonths() {
   const client = await pool.connect();
   try {
@@ -697,10 +643,11 @@ app.get('/api/addresses', addressesLimiter, (req, res) => {
   return res.json({ ok:true, items: [] });
 });
 
-/* LOOKUP: if subscriber+contract exists -> return ACTIVE subscriber meters */
+/* LOOKUP: abonenta kods + līguma nr -> atgriež tikai Aktīvus līgumus un spēkā esošus skaitītājus */
 app.get('/api/lookup', lookupLimiter, async (req, res) => {
   const originError = enforceSameOriginSoft(req, res);
   if (originError) return;
+  if (!requireDbJson(res)) return;
 
   const subscriber = String(req.query.subscriber || '').trim().replace(/\D+/g, '');
   const contract = String(req.query.contract || '').trim();
@@ -710,45 +657,39 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
 
   const client = await pool.connect();
   try {
-    // <-- ACTIVE month with fallback
-    const am = await getActiveMonthForLatestBatch(client);
-    const batchId = am.batchId;
+    const batchId = await getLatestBillingBatchId(client);
     if (!batchId) return res.json({ ok:true, found:false });
 
-    const activeMonth = await getActiveMonthForSubscriber(client, batchId, subscriber);
-
-    // first: check if subscriber+contract exists in ACTIVE month
     const okMatch = await client.query(`
-  SELECT 1
-  FROM billing_meters_snapshot
-  WHERE batch_id=$1
-    AND subscriber_code=$2
-    AND contract_nr=$3
-    AND contract_status='Aktīvs'
-    AND meter_valid_to IS NULL
-    AND last_reading IS NOT NULL
-  LIMIT 1
-`, [batchId, subscriber, contract]);
+      SELECT 1
+      FROM billing_meters_snapshot
+      WHERE batch_id=$1
+        AND subscriber_code=$2
+        AND contract_nr=$3
+        AND contract_status='Aktīvs'
+        AND meter_valid_to IS NULL
+        AND last_reading IS NOT NULL
+      LIMIT 1
+    `, [batchId, subscriber, contract]);
 
     if (!okMatch.rowCount) return res.json({ ok:true, found:false });
 
-    // then: return ALL ACTIVE meters for subscriber (in ACTIVE month)
     const q = await client.query(`
-  WITH latest AS (
-    SELECT DISTINCT ON (contract_nr, meter_serial)
-      contract_nr, address_raw, meter_serial, last_reading, client_name, period_to
-    FROM billing_meters_snapshot
-    WHERE batch_id=$1
-      AND subscriber_code=$2
-      AND contract_status='Aktīvs'
-      AND meter_valid_to IS NULL
-      AND last_reading IS NOT NULL
-    ORDER BY contract_nr, meter_serial, period_to DESC NULLS LAST
-  )
-  SELECT *
-  FROM latest
-  ORDER BY contract_nr, address_raw, meter_serial
-`, [batchId, subscriber]);
+      WITH latest AS (
+        SELECT DISTINCT ON (contract_nr, meter_serial)
+          contract_nr, address_raw, meter_serial, last_reading, client_name, period_to
+        FROM billing_meters_snapshot
+        WHERE batch_id=$1
+          AND subscriber_code=$2
+          AND contract_status='Aktīvs'
+          AND meter_valid_to IS NULL
+          AND last_reading IS NOT NULL
+        ORDER BY contract_nr, meter_serial, period_to DESC NULLS LAST
+      )
+      SELECT *
+      FROM latest
+      ORDER BY contract_nr, address_raw, meter_serial
+    `, [batchId, subscriber]);
 
     if (!q.rowCount) return res.json({ ok:true, found:false });
 
@@ -772,7 +713,6 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
       ok: true,
       found: true,
       batch_id: batchId,
-      active_month: activeMonth,
       client_name: q.rows[0].client_name || null,
       contracts: Array.from(contracts),
       addresses: Array.from(byAddr.entries()).map(([address, meters]) => ({ address, meters }))
@@ -807,7 +747,10 @@ app.get('/api/history', lookupLimiter, async (req, res) => {
     const auth = await client.query(`
       SELECT 1
       FROM billing_meters_snapshot
-      WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr=$3 AND meter_serial=$4
+      WHERE batch_id=$1 AND subscriber_code=$2
+        AND contract_status='Aktīvs'
+        AND meter_valid_to IS NULL
+        AND last_reading IS NOT NULL AND contract_nr=$3 AND meter_serial=$4
       LIMIT 1
     `, [batchId, subscriber, contract, meter]);
 
@@ -900,21 +843,11 @@ app.get('/api/invite/resolve', lookupLimiter, async (req, res) => {
     if (!batchId) return res.status(503).json({ ok:false, error:'Billing data not uploaded' });
 
     const q = await client.query(`
-  WITH latest AS (
-    SELECT DISTINCT ON (contract_nr, meter_serial)
-      contract_nr, address_raw, meter_serial, last_reading, client_name, period_to
-    FROM billing_meters_snapshot
-    WHERE batch_id=$1
-      AND subscriber_code=$2
-      AND contract_status='Aktīvs'
-      AND meter_valid_to IS NULL
-      AND last_reading IS NOT NULL
-    ORDER BY contract_nr, meter_serial, period_to DESC NULLS LAST
-  )
-  SELECT contract_nr, address_raw, meter_serial, last_reading, client_name
-  FROM latest
-  ORDER BY contract_nr, address_raw, meter_serial
-`, [batchId, subscriber]);
+      SELECT contract_nr, address_raw, meter_serial, last_reading, client_name
+      FROM billing_meters_snapshot
+      WHERE batch_id=$1 AND subscriber_code=$2
+      ORDER BY contract_nr, address_raw, meter_serial
+    `, [batchId, subscriber]);
 
     if (!q.rowCount) return res.status(400).json({ ok:false, error:'INVALID_LINK' });
 
@@ -1073,6 +1006,12 @@ app.post('/api/invite/submit', submitLimiter, async (req, res) => {
              period_from, period_to, meter_type, stage, notes, qty_type, client_name
       FROM billing_meters_snapshot
       WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr = ANY($3::text[])
+        AND contract_status='Aktīvs'
+        AND meter_valid_to IS NULL
+        AND last_reading IS NOT NULL
+        AND contract_status='Aktīvs'
+        AND meter_valid_to IS NULL
+        AND last_reading IS NOT NULL
     `, [batchId, subscriber, openContracts]);
 
     if (!snap.rowCount) {
@@ -1271,6 +1210,9 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
         SELECT 1
         FROM billing_meters_snapshot
         WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr=$3
+        AND contract_status='Aktīvs'
+        AND meter_valid_to IS NULL
+        AND last_reading IS NOT NULL
         LIMIT 1
       `, [batchId, subscriber_code, auth_contract_nr]);
 
@@ -1282,6 +1224,9 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
                period_from, period_to, meter_type, stage, notes, qty_type, client_name
         FROM billing_meters_snapshot
         WHERE batch_id=$1 AND subscriber_code=$2 AND contract_nr = ANY($3::text[])
+        AND contract_status='Aktīvs'
+        AND meter_valid_to IS NULL
+        AND last_reading IS NOT NULL
       `, [batchId, subscriber_code, contractsWanted]);
 
       if (!snap.rowCount) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Subscriber/contract not found' }); }
@@ -1888,6 +1833,9 @@ app.get('/admin/invite_incomplete.csv', requireBasicAuth, async (req, res) => {
         FROM billing_meters_snapshot b, latest_batch lb
         WHERE b.batch_id = lb.id
           AND b.subscriber_code IN (SELECT subscriber_code FROM invited_subs)
+          AND b.contract_status='Aktīvs'
+          AND b.meter_valid_to IS NULL
+          AND b.last_reading IS NOT NULL
       ),
       submitted AS (
         SELECT contract_nr, meter_no
@@ -2314,18 +2262,15 @@ async function processUnifiedImport(jobId, file, filename) {
   job.rowsProcessed = 0;
 
   const errors = [];
-  const addErr = (e) => {
-    if (errors.length < 50000) errors.push(e);
-  };
+  const addErr = (e) => { if (errors.length < 50000) errors.push(e); };
 
   try {
     const isCsv = filename.toLowerCase().endsWith('.csv');
     const isXlsx = filename.toLowerCase().endsWith('.xlsx');
-
     if (!isCsv && !isXlsx) throw new Error('Unsupported file type (allowed: .csv, .xlsx)');
 
-    // required columns (stable)
-        const COL = {
+    // NEW billing export headers (2026+)
+    const COL = {
       sub: 'NĪPLigPap.NĪPLīg.Ab.Kods',
       contract: 'NĪPLigPap.NĪPLīg.Numurs',
       address: 'NĪPLigPap.NĪO.Adrese',
@@ -2344,11 +2289,10 @@ async function processUnifiedImport(jobId, file, filename) {
       meterValidTo: 'SkaE.Spēkā līdz'
     };
 
-
     const totalRows = isCsv ? Math.max(0, countNewlines(file.buffer) - 1) : null;
     job.totalRows = totalRows || null;
 
-    const meters = new Map(); // key contract||meter -> { metaRow, bestPrevRow, bestPrevIso, bestPrevReading, fallbackPrev, metaIso }
+    const meters = new Map(); // key contract||meter -> snapshot row (latest period_to)
     const subsSet = new Set();
     const contractsSet = new Set();
     const metersSet = new Set();
@@ -2363,63 +2307,59 @@ async function processUnifiedImport(jobId, file, filename) {
         const parser = csvParse({ headers: true, delimiter: ';', ignoreEmpty: true, trim: true });
         stream.pipe(parser);
         let rowNum = 1;
-        for await (const row of parser) {
-          rowNum++;
-          yield { row, rowNum };
-        }
+        for await (const row of parser) { rowNum++; yield { row, rowNum }; }
       } else {
         const wb = XLSX.read(file.buffer, { type: 'buffer' });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
         if (!rows || rows.length < 2) throw new Error('XLSX: no data');
-        // assume first row is header; normalize
+
         const header = rows[0].map(x => String(x ?? '').replace(/\uFEFF/g,'').trim());
         const idx = {};
         for (const [k, name] of Object.entries(COL)) {
           const i = header.findIndex(h => normCell(h) === normCell(name));
           idx[k] = i;
         }
-        // verify required indices
+
         const requiredKeys = [
           'sub','contract','address','meter','meterType',
           'pFrom','pTo','reading','prevReading','qty','qtyType',
           'email','contractStatus','meterValidFrom','meterValidTo'
         ];
         const missing = requiredKeys.filter(k => idx[k] == null || idx[k] < 0);
-        if (missing.length) throw new Error('XLSX: missing required columns: ' + missing.map(k=>COL[k]).join(', '));
+        if (missing.length) throw new Error('XLSX: missing required columns: ' + missing.map(k => COL[k]).join(', '));
+
         let rowNum = 1;
         for (let r = 1; r < rows.length; r++) {
           rowNum++;
           const rr = rows[r];
           if (!Array.isArray(rr) || rr.length === 0) continue;
           const obj = {};
-          for (const [k, i] of Object.entries(idx)) {
-            if (i >= 0) obj[COL[k]] = rr[i];
-          }
+          for (const [k, i] of Object.entries(idx)) if (i >= 0) obj[COL[k]] = rr[i];
           yield { row: obj, rowNum };
         }
       }
     })();
 
-    // For CSV verify header once by checking first row keys when first row arrives
+    // For CSV verify header once
     let csvHeaderChecked = !isCsv;
     let rowCount = 0;
 
     for await (const { row, rowNum } of rowIter) {
       rowCount++;
       job.rowsProcessed = rowCount;
-      if (totalRows) job.percent = Math.min(99, Math.floor((rowCount / Math.max(1,totalRows)) * 80)); // parsing up to 80%
+      if (totalRows) job.percent = Math.min(99, Math.floor((rowCount / Math.max(1,totalRows)) * 80));
 
       if (isCsv && !csvHeaderChecked) {
         const keys = Object.keys(row || {}).map(k => String(k).replace(/\uFEFF/g,'').trim());
-        const req = [COL.sub,COL.contract,COL.address,COL.meter,COL.pFrom,COL.pTo,COL.reading,COL.prevReading,COL.qty,COL.email];
+        const req = Object.values(COL);
         const missing = req.filter(k => !keys.includes(k));
         if (missing.length) throw new Error('CSV: missing required columns: ' + missing.join(', '));
         csvHeaderChecked = true;
       }
 
       const subRaw = normCell(row[COL.sub]);
-      const subscriber = subRaw.replace(/\D+/g, ''); // keep leading zeros
+      const subscriber = subRaw.replace(/\D+/g, '');
       const contract = normCell(row[COL.contract]);
       const meterNo = normCell(row[COL.meter]);
       const address = String(row[COL.address] ?? '').trim();
@@ -2432,6 +2372,7 @@ async function processUnifiedImport(jobId, file, filename) {
 
       const readingNum = parseNumberLoose(row[COL.reading]);
       const prevReadingNum = parseNumberLoose(row[COL.prevReading]);
+
       const qtyNumRaw = parseNumberLoose(row[COL.qty]);
       let qtyNum = Number.isFinite(qtyNumRaw) ? qtyNumRaw : 0;
       if (!Number.isFinite(qtyNum) || qtyNum < 0) qtyNum = 0;
@@ -2453,14 +2394,13 @@ async function processUnifiedImport(jobId, file, filename) {
       contractsSet.add(contract);
       metersSet.add(contract + '||' + meterNo);
 
-      // history aggregation (no filtering by qty_type)
-      const month = isoToMonth(pToIso);
-      if (month) {
-        const hk = contract + '||' + meterNo + '||' + month;
+      // history aggregation (all rows)
+      if (pToMonth) {
+        const hk = contract + '||' + meterNo + '||' + pToMonth;
         histAgg.set(hk, (histAgg.get(hk) || 0) + qtyNum);
       }
 
-      // email counts
+      // email counts (all rows)
       if (email) {
         const ce = contractEmailCounts.get(contract) || new Map();
         ce.set(email, (ce.get(email) || 0) + 1);
@@ -2471,22 +2411,21 @@ async function processUnifiedImport(jobId, file, filename) {
         subEmailCounts.set(subscriber, se);
       }
 
-            // NEW: status/validity from billing export
+      // NEW: status/validity from billing export
       const contractStatus = String(row[COL.contractStatus] ?? '').trim();
       const meterValidFromIso = excelDateToISO(row[COL.meterValidFrom]);
       const meterValidToIso = excelDateToISO(row[COL.meterValidTo]);
 
-      // FILTER: only active contract + meter still in force (Spēkā līdz is empty)
+      // FILTER snapshot: only active contract + meter still in force
       if (contractStatus !== 'Aktīvs') continue;
       if (meterValidToIso) continue;
 
-      // snapshot: keep latest row per (contract + meter) by period_to
-      const key = contract + '||' + meterNo;
       const meterType = String(row[COL.meterType] ?? '').trim() || null;
       const qtyType = String(row[COL.qtyType] ?? '').trim() || null;
 
+      const key = contract + '||' + meterNo;
       const existing = meters.get(key);
-      const shouldReplace = !existing || (existing.period_to && pToIso && compareIsoDate(pToIso, existing.period_to) > 0);
+      const shouldReplace = !existing || compareIsoDate(pToIso, existing.period_to) > 0;
 
       if (shouldReplace) {
         meters.set(key, {
@@ -2501,29 +2440,24 @@ async function processUnifiedImport(jobId, file, filename) {
           period_to: pToIso || null,
           last_reading: Number.isFinite(prevReadingNum) ? prevReadingNum : null,
           reading: Number.isFinite(readingNum) ? readingNum : null,
-          consumption: Number.isFinite(qtyNum) ? qtyNum : 0,
+          consumption: qtyNum,
           qtyType,
           contractStatus,
           meterValidFrom: meterValidFromIso || null,
           meterValidTo: meterValidToIso || null
         });
       }
-
+    }
 
     job.phase = 'DB import';
     job.percent = 82;
 
-        // Build snapshot rows (already filtered + latest per meter)
     const snapshotRows = Array.from(meters.values());
-
 
     // choose email for each contract, fallback from subscriber if missing
     const bestEmail = (m) => {
       let best = null, bestC = 0;
-      for (const [e, c] of m.entries()) {
-        if (!e) continue;
-        if (c > bestC) { bestC = c; best = e; }
-      }
+      for (const [e, c] of m.entries()) { if (!e) continue; if (c > bestC) { bestC = c; best = e; } }
       return best;
     };
 
@@ -2533,20 +2467,20 @@ async function processUnifiedImport(jobId, file, filename) {
       if (e) contractEmail.set(c, e);
     }
 
-    // subscriber best emails
     const subBestEmail = new Map();
     for (const [s, m] of subEmailCounts.entries()) {
       const e = bestEmail(m);
       if (e) subBestEmail.set(s, e);
     }
 
-    // fallback: if contract email missing, use subscriber email (first seen in snapshotRows)
     for (const row of snapshotRows) {
       if (!contractEmail.get(row.contract)) {
         const e = subBestEmail.get(row.subscriber);
         if (e) contractEmail.set(row.contract, e);
       }
     }
+
+    if (!pool) throw new Error('DB not configured');
 
     const client = await pool.connect();
     try {
@@ -2559,8 +2493,7 @@ async function processUnifiedImport(jobId, file, filename) {
       `, [filename, targetMonth, prevMonth]);
       const batchId = batchIns.rows[0].id;
 
-      // snapshot insert
-            const snapSql = `
+      const snapSql = `
         INSERT INTO billing_meters_snapshot (
           batch_id,
           meter_type,
@@ -2586,9 +2519,8 @@ async function processUnifiedImport(jobId, file, filename) {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
       `;
 
-
       for (const r of snapshotRows) {
-                await client.query(snapSql, [
+        await client.query(snapSql, [
           batchId,
           r.meterType || null,
           r.contract,
@@ -2598,21 +2530,20 @@ async function processUnifiedImport(jobId, file, filename) {
           r.period_from || null,
           r.period_to || null,
           r.meterNo || null,
-          null,   // next_verif_date (vairs nav eksportā)
-          null,   // last_reading_date
+          null,
+          null,
           r.last_reading,
           r.consumption == null ? null : r.consumption,
           r.reading == null ? null : r.reading,
-          null,   // stage
-          null,   // notes
+          null,
+          null,
           r.qtyType || null,
           r.contractStatus || null,
           r.meterValidFrom || null,
           r.meterValidTo || null
         ]);
-	  }
+      }
 
-      // history insert (batch-scoped)
       const histSql = `
         INSERT INTO history_monthly_meter (batch_id, contract_nr, meter_no, month, m3, updated_at)
         VALUES ($1,$2,$3,$4,$5, now())
@@ -2626,24 +2557,18 @@ async function processUnifiedImport(jobId, file, filename) {
         const m3 = Number.isFinite(v) && v > 0 ? v : 0;
         await client.query(histSql, [batchId, c, m, month, m3]);
         histCount++;
-        if (histCount % 2000 === 0) {
-          job.percent = Math.min(98, 82 + Math.floor((histCount / Math.max(1,histAgg.size)) * 16));
-        }
+        if (histCount % 2000 === 0) job.percent = Math.min(98, 82 + Math.floor((histCount / Math.max(1,histAgg.size)) * 16));
       }
 
-      // contract_email_map upsert (prefer contract email, fallback subscriber)
       const emailSql = `
         INSERT INTO contract_email_map (contract_nr, email, updated_at)
         VALUES ($1,$2, now())
         ON CONFLICT (contract_nr) DO UPDATE SET email=EXCLUDED.email, updated_at=now()
       `;
-      for (const [c, e] of contractEmail.entries()) {
-        await client.query(emailSql, [c, e]);
-      }
+      for (const [c, e] of contractEmail.entries()) await client.query(emailSql, [c, e]);
 
       await client.query('COMMIT');
 
-      // report
       const report = {
         file: filename,
         batchId,
@@ -2676,21 +2601,20 @@ async function processUnifiedImport(jobId, file, filename) {
           <li><b>Unikālie līgumi:</b> ${report.contracts}</li>
           <li><b>Unikālie skaitītāji:</b> ${report.meters}</li>
           <li><b>Apstrādātās rindas:</b> ${report.rowsProcessed}</li>
-          <li><b>Snapshot ieraksti:</b> ${report.snapshotRows}</li>
+          <li><b>Snapshot ieraksti (aktīvi + spēkā):</b> ${report.snapshotRows}</li>
           <li><b>History mēneši (contract+meter+month):</b> ${report.historyRows}</li>
           <li><b>E-pasti (contract map):</b> ${report.contractEmails}</li>
           <li><b>Kļūdas/warnings:</b> ${report.errors}</li>
         </ul>
         <p>Ja kļūdu skaits > 0, lejupielādē kļūdu CSV no pogas zem progress joslas.</p>
       `;
-
     } catch (e) {
       try { await client.query('ROLLBACK'); } catch {}
       throw e;
     } finally {
       client.release();
     }
-  }
+
   } catch (e) {
     job.status = 'error';
     job.phase = 'Error';
@@ -2708,6 +2632,7 @@ async function processUnifiedImport(jobId, file, filename) {
     pruneImportJobs();
   }
 }
+
 
 app.post('/admin/import/upload', requireBasicAuth, upload.single('file'), async (req, res) => {
   pruneImportJobs();
@@ -2789,54 +2714,55 @@ async function exportCsv(res, req) {
     'submitted_at_utc','meter_no','previous_reading','reading','consumption'
   ]));
 
-const client = await pool.connect();
-try {
-  let sql = `
-    SELECT
-      s.id AS submission_id,
-      s.client_submission_id,
-      s.subscriber_code,
-      COALESCE(l.contract_nr, s.contract_nr) AS contract_nr,
-      s.address,
-      (s.submitted_at AT TIME ZONE 'UTC') AS submitted_at_utc,
-      l.meter_no,
-      l.previous_reading,
-      l.reading,
-      l.consumption
-    FROM submissions s
-    JOIN submission_lines l ON l.submission_id = s.id
-  `;
+  const client = await pool.connect();
+  try {
+    let sql = `
+      SELECT
+        s.id AS submission_id,
+        s.client_submission_id,
+        s.subscriber_code,
+        COALESCE(l.contract_nr, s.contract_nr) AS contract_nr,
+        s.address,
+        (s.submitted_at AT TIME ZONE 'UTC') AS submitted_at_utc,
+        l.meter_no,
+        l.previous_reading,
+        l.reading,
+        l.consumption
+      FROM submissions s
+      JOIN submission_lines l ON l.submission_id = s.id
+    `;
 
-  const params = [];
-  if (/^\d{4}-\d{2}$/.test(month)) {
-    sql += ` WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2`;
-    params.push(TZ, month);
+    const params = [];
+    if (/^\d{4}-\d{2}$/.test(month)) {
+      sql += ` WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2`;
+      params.push(TZ, month);
+    }
+
+    sql += ` ORDER BY s.submitted_at DESC, s.id DESC, l.id ASC`;
+
+    const result = await client.query(sql, params);
+    for (const r of result.rows) {
+      res.write(toCSVRow([
+        r.submission_id,
+        r.client_submission_id,
+        r.subscriber_code,
+        r.contract_nr || '',
+        r.address || '',
+        r.submitted_at_utc instanceof Date ? r.submitted_at_utc.toISOString() : String(r.submitted_at_utc),
+        r.meter_no,
+        r.previous_reading == null ? '' : r.previous_reading,
+        r.reading,
+        r.consumption == null ? '' : r.consumption
+      ]));
+    }
+    res.end();
+  } catch (err) {
+    console.error('export error', err);
+    if (!res.headersSent) res.status(500);
+    res.end('Export failed');
+  } finally {
+    client.release();
   }
-
-  sql += ` ORDER BY s.submitted_at DESC, s.id DESC, l.id ASC`;
-
-  const result = await client.query(sql, params);
-  for (const r of result.rows) {
-    res.write(toCSVRow([
-      r.submission_id,
-      r.client_submission_id,
-      r.subscriber_code,
-      r.contract_nr || '',
-      r.address || '',
-      r.submitted_at_utc instanceof Date ? r.submitted_at_utc.toISOString() : String(r.submitted_at_utc),
-      r.meter_no,
-      r.previous_reading == null ? '' : r.previous_reading,
-      r.reading,
-      r.consumption == null ? '' : r.consumption
-    ]));
-  }
-  res.end();
-} catch (err) {
-  console.error('export error', err);
-  if (!res.headersSent) res.status(500);
-  res.end('Export failed');
-} finally {
-  client.release();
 }
 
 app.get('/admin/export.csv', requireBasicAuth, async (req, res) => {
@@ -3027,26 +2953,26 @@ app.get('/admin/invites', requireBasicAuth, async (req, res) => {
 });
 
 app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
+  if (!pool) return res.status(503).send('DB not configured');
   const month = currentMonthYYYYMM();
   const now = DateTime.now().setZone(TZ);
   const expiresAt = now.endOf('month').toUTC().toISO();
 
   const client = await pool.connect();
   try {
-    const am = await getActiveMonthForLatestBatch(client);
-    const activeMonth = am.activeMonth;
-    const batchId = am.batchId;
+    const batchId = await getLatestBillingBatchId(client);
     if (!batchId) return res.status(503).send('Billing snapshot nav ielādēts.');
 
-    // ONLY active subscribers (at least 1 active meter row)
+    // ONLY active subscribers (at least 1 active+in-force meter row)
     const subs = await client.query(`
       SELECT DISTINCT subscriber_code
       FROM billing_meters_snapshot
       WHERE batch_id = $1
         AND subscriber_code IS NOT NULL
-        AND to_char(period_to, 'YYYY-MM') = $2
+        AND contract_status='Aktīvs'
+        AND meter_valid_to IS NULL
         AND last_reading IS NOT NULL
-    `, [batchId, activeMonth]);
+    `, [batchId]);
 
     await client.query('BEGIN');
 
@@ -3076,21 +3002,21 @@ app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
 
     await client.query('COMMIT');
 
-    // Stats for popup (emails only for ACTIVE subscribers)
+    // Stats for popup (emails only for active subscribers)
     const subList = subs.rows.map(r => String(r.subscriber_code || '').trim()).filter(Boolean);
     let totalEmails = 0;
     let noEmailSubs = 0;
 
     if (subList.length) {
-      // contracts only in ACTIVE month (so export matches active too)
       const contractRows = await client.query(`
         SELECT DISTINCT subscriber_code, contract_nr
         FROM billing_meters_snapshot
         WHERE batch_id=$1
           AND subscriber_code = ANY($2::text[])
-          AND substring(period_to from 1 for 7) = $3
+          AND contract_status='Aktīvs'
+          AND meter_valid_to IS NULL
           AND last_reading IS NOT NULL
-      `, [batchId, subList, activeMonth]);
+      `, [batchId, subList]);
 
       const contractsBySub = new Map();
       const allContracts = new Set();
@@ -3138,7 +3064,7 @@ app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
       <div class="muted">E-pastu skaits (saņēmēji): <b>${totalEmails}</b></div>
       <div class="muted">Inviti bez e-pasta: <b>${noEmailSubs}</b></div>
       <script>
-        alert("Invite ģenerēšana pabeigta.\\nUnikālie inviti: ${created}\\nE-pastu skaits: ${totalEmails}\\nBez e-pasta: ${noEmailSubs}");
+        alert("Invite ģenerēšana pabeigta.\nUnikālie inviti: ${created}\nE-pastu skaits: ${totalEmails}\nBez e-pasta: ${noEmailSubs}");
       </script>
       <div class="muted" style="margin-top:10px"><a href="/admin/invites">← atpakaļ</a></div>
     `));
@@ -3152,6 +3078,7 @@ app.post('/admin/invites/generate', requireBasicAuth, async (req, res) => {
 });
 
 app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
+  if (!pool) return res.status(503).send('DB not configured');
   const month = currentMonthYYYYMM();
   const baseUrl = getBaseUrl(req);
 
@@ -3174,14 +3101,14 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
     let contractRows = [];
     if (batchId && subs.length) {
       const q = await client.query(`
-  SELECT DISTINCT subscriber_code, contract_nr
-  FROM billing_meters_snapshot
-  WHERE batch_id=$1
-    AND subscriber_code = ANY($2::text[])
-    AND contract_status='Aktīvs'
-    AND meter_valid_to IS NULL
-    AND last_reading IS NOT NULL
-`, [batchId, subs]);
+        SELECT DISTINCT subscriber_code, contract_nr
+        FROM billing_meters_snapshot
+        WHERE batch_id=$1
+          AND subscriber_code = ANY($2::text[])
+          AND contract_status='Aktīvs'
+          AND meter_valid_to IS NULL
+          AND last_reading IS NOT NULL
+      `, [batchId, subs]);
       contractRows = q.rows;
     }
 
@@ -3228,7 +3155,6 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
       const link = `${baseUrl}/i/${token}`;
 
       if (emailSet.size === 0) {
-        // keep row with empty email so it's visible which subscribers have no email
         res.write(toCSVRow([sub, '', link]));
         continue;
       }
@@ -3247,11 +3173,11 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
     client.release();
   }
 });
-}
+
 
 /* ===================== start ===================== */
 
-// always start listening FIRST (so Railway doesn't 502)
+// Start listening FIRST (prevents Railway 502). Init runs in background.
 let INIT_READY = false;
 let INIT_ERROR = null;
 
@@ -3264,9 +3190,14 @@ app.listen(PORT, () => {
   console.log(`server listening on :${PORT} (enforceWindow=${ENFORCE_WINDOW}, tz=${TZ})`);
 });
 
-// init in background (non-blocking)
 (async () => {
   try {
+    if (!pool) {
+      INIT_ERROR = 'DATABASE_URL is missing';
+      console.error('[INIT] FAILED: ' + INIT_ERROR);
+      return;
+    }
+
     console.log('[INIT] ensureSchema...');
     await ensureSchema();
     console.log('[INIT] ensureSchema OK');
@@ -3291,4 +3222,3 @@ app.listen(PORT, () => {
     console.error('[INIT] FAILED', e);
   }
 })();
-}
