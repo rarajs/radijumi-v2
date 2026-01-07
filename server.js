@@ -1578,23 +1578,47 @@ app.get('/admin/api/analytics', requireBasicAuth, async (req, res) => {
     `, [monthEff]);
     const tokens = tok.rows[0]?.tokens ?? 0;
 
-    // Today / Yesterday submissions and unique subscribers
-    const dy = await client.query(`
-      WITH t AS (
+        // Klienti / Adreses (šodien / vakar) + bāze procentiem pret izvēlēto mēnesi
+    const caQ = await client.query(`
+      WITH s AS (
         SELECT
           (submitted_at AT TIME ZONE $1)::date AS d,
-          count(*)::int AS submissions,
-          count(distinct subscriber_code)::int AS subs
+          subscriber_code,
+          address
         FROM submissions
-        WHERE (submitted_at AT TIME ZONE $1)::date >= ((now() AT TIME ZONE $1)::date - interval '1 day')::date
-        GROUP BY 1
+        WHERE to_char(date_trunc('month', submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
       )
       SELECT
-        coalesce((SELECT submissions FROM t WHERE d = (now() AT TIME ZONE $1)::date), 0) AS today_submissions,
-        coalesce((SELECT subs FROM t WHERE d = (now() AT TIME ZONE $1)::date), 0) AS today_subs,
-        coalesce((SELECT submissions FROM t WHERE d = ((now() AT TIME ZONE $1)::date - interval '1 day')::date), 0) AS yday_submissions,
-        coalesce((SELECT subs FROM t WHERE d = ((now() AT TIME ZONE $1)::date - interval '1 day')::date), 0) AS yday_subs
-    `, [tz]);
+        COUNT(DISTINCT subscriber_code)::int AS month_clients,
+        COUNT(DISTINCT address)::int AS month_addresses,
+
+        COUNT(DISTINCT CASE WHEN d = (now() AT TIME ZONE $1)::date THEN subscriber_code END)::int AS today_clients,
+        COUNT(DISTINCT CASE WHEN d = (now() AT TIME ZONE $1)::date THEN address END)::int AS today_addresses,
+
+        COUNT(DISTINCT CASE WHEN d = ((now() AT TIME ZONE $1)::date - 1) THEN subscriber_code END)::int AS yday_clients,
+        COUNT(DISTINCT CASE WHEN d = ((now() AT TIME ZONE $1)::date - 1) THEN address END)::int AS yday_addresses
+      FROM s
+    `, [tz, monthEff]);
+
+    const ca = caQ.rows[0] || {
+      month_clients:0, month_addresses:0,
+      today_clients:0, today_addresses:0,
+      yday_clients:0, yday_addresses:0
+    };
+
+    const clients_today_pct = ca.month_clients ? Math.round((ca.today_clients * 100) / ca.month_clients) : 0;
+    const clients_yday_pct  = ca.month_clients ? Math.round((ca.yday_clients  * 100) / ca.month_clients) : 0;
+    const addr_today_pct    = ca.month_addresses ? Math.round((ca.today_addresses * 100) / ca.month_addresses) : 0;
+    const addr_yday_pct     = ca.month_addresses ? Math.round((ca.yday_addresses  * 100) / ca.month_addresses) : 0;
+
+    const clientsAddresses = {
+      ...ca,
+      clients_today_pct,
+      clients_yday_pct,
+      addr_today_pct,
+      addr_yday_pct
+    };
+
 
     // Anomalies for selected month (based on submission_lines)
     const an = await client.query(`
@@ -1632,7 +1656,7 @@ app.get('/admin/api/analytics', requireBasicAuth, async (req, res) => {
       month: monthEff,
       last_import_at,
       tokens,
-      today: dy.rows[0],
+      clients_addresses: clientsAddresses,
       anomalies: an.rows[0],
       hourly: hourly.rows
     });
