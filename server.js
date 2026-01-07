@@ -3252,12 +3252,24 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
 /* ===================== start ===================== */
 (async () => {
   try {
+    console.log('[BOOT] step ensureSchema...');
     await ensureSchema();
-    // retention for technical data (3 months)
+    console.log('[BOOT] step ensureSchema OK');
+
+    console.log('[BOOT] step enforceTechRetention...');
     enforceTechRetention();
     setInterval(enforceTechRetention, 24 * 60 * 60 * 1000);
+    console.log('[BOOT] step enforceTechRetention OK');
+
+    console.log('[BOOT] step startPgListener...');
     await startPgListener();
+    console.log('[BOOT] step startPgListener OK');
+
+    console.log('[BOOT] step loadAddressesIfNeeded...');
     loadAddressesIfNeeded();
+    console.log('[BOOT] step loadAddressesIfNeeded OK');
+
+    console.log('[BOOT] step listen...');
     app.listen(PORT, () => {
       console.log(`server listening on :${PORT} (enforceWindow=${ENFORCE_WINDOW}, tz=${TZ})`);
     });
