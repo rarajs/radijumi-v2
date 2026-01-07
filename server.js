@@ -1581,10 +1581,11 @@ app.get('/admin/api/analytics', requireBasicAuth, async (req, res) => {
      // Klienti/Adreses, kas iesnieguši rādījumus izvēlētajā mēnesī
 const submittedQ = await client.query(`
   SELECT
-    COUNT(DISTINCT subscriber_code)::int AS submitted_clients,
-    COUNT(DISTINCT address)::int AS submitted_addresses
-  FROM submissions
-  WHERE to_char(date_trunc('month', submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
+    COUNT(DISTINCT s.subscriber_code)::int AS submitted_clients,
+    COUNT(DISTINCT sl.address)::int AS submitted_addresses
+  FROM submissions s
+  JOIN submission_lines sl ON sl.submission_id = s.id
+  WHERE to_char(date_trunc('month', s.submitted_at AT TIME ZONE $1), 'YYYY-MM') = $2
 `, [tz, monthEff]);
 
 const submitted = submittedQ.rows[0] || { submitted_clients: 0, submitted_addresses: 0 };
