@@ -564,18 +564,21 @@ async function getLatestBillingBatchId(client) {
 }
 async function getLatestBillingBatchInfo() {
   const client = await pool.connect();
-  try {
-    const r = await client.query(`
-      SELECT id, source_filename, uploaded_at, target_month, prev_month
-      FROM billing_import_batches
-      ORDER BY uploaded_at DESC
-      LIMIT 1
-    `);
-    return r.rowCount ? r.rows[0] : null;
-  } finally {
-    client.release();
-  }
+try {
+  await client.query('BEGIN');
+
+  // ... ŠEIT paliek visa importa loģika (inserti, mapošana, utt.) ...
+
+  await client.query('COMMIT');
+
+  // ... ŠEIT paliek job.report / job.reportHtml / job.status='done' ...
+} catch (e) {
+  try { await client.query('ROLLBACK'); } catch {}
+  throw e;
+} finally {
+  client.release();
 }
+
 async function listAvailableMonths() {
   const client = await pool.connect();
   try {
@@ -2582,7 +2585,7 @@ async function processUnifiedImport(jobId, file, filename) {
           r.meterValidFrom || null,
           r.meterValidTo || null
         ]);
-
+	  }
 
       // history insert (batch-scoped)
       const histSql = `
