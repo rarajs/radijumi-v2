@@ -1560,7 +1560,7 @@ app.get('/admin/api/analytics', requireBasicAuth, async (req, res) => {
     const tz = TZ;
     const m = (/^\d{4}-\d{2}$/.test(monthQ)) ? monthQ : null;
     const monthEff = m || (await client.query(`SELECT to_char(now() AT TIME ZONE $1, 'YYYY-MM') AS m`, [tz])).rows[0].m;
-
+    const batchId = await getLatestBillingBatchId(client);
     // Last import timestamp (no filename/batch id)
     const imp = await client.query(`
       SELECT uploaded_at
