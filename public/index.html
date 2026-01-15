@@ -1707,38 +1707,31 @@ async function applyWindowLockIfNeeded(){
   // Invite režīmā šo NERĀDĀM
   if (document.documentElement.classList.contains('invite-mode')) return;
 
-  try{
+  try {
     const r = await fetch('/api/window-status', { cache:'no-store' });
-    const j = await r.json().catch(()=>null);
+    const j = await r.json().catch(() => null);
     if (!r.ok || !j || j.ok !== true) return;
+    if (j.open) return;
 
-    if (j.open) return; // viss ok
+    // paslēpjam sarkano paziņojumu (droši selektori)
+    document.querySelectorAll('.alert,.notice,.errorBox,#windowMsg')
+      .forEach(el => el.style.display = 'none');
 
-    // noņemam sarkano paziņojumu (ja tāds ir)
-    document.querySelectorAll('#windowNotice,#windowBanner,.windowNotice,.windowBanner')
-      .forEach(el => el.style.display='none');
-
+    // ieslēdzam locked mode
     document.body.classList.add('locked-mode');
 
-    // AIZVĒRT: back, ja iespējams, citādi uz jurmalasudens.lv
     const btn = document.getElementById('lockCloseBtn');
-    if (btn){
+    if (btn) {
       btn.onclick = () => {
         if (history.length > 1) history.back();
         else location.href = 'https://www.jurmalasudens.lv/';
       };
     }
-  } catch(e){
-    // ja kaut kas ar fetch, nekrītam nost
+  } catch (e) {
+    // ignore
   }
 }
-
-
-
     
-    refreshAll();
-  }
-
   init();
   applyWindowLockIfNeeded();
 </script>
