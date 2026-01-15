@@ -756,8 +756,28 @@ app.get('/api/history', lookupLimiter, async (req, res) => {
 
     if (!auth.rowCount) return res.status(403).json({ ok:false, error:'Not allowed' });
 
-    
-// A-variants: always show 12 months ending at prev_month from the latest import batch
+app.get('/api/window-status', (req, res) => {
+  // if ENFORCE_WINDOW=0 -> always open
+  if (!ENFORCE_WINDOW) return res.json({ ok:true, open:true });
+
+  const now = DateTime.now().setZone(TZ);
+
+  const start = now.startOf('month').plus({ days: 24 }).startOf('day'); // 25th 00:00
+  const end = now.endOf('month').set({ hour:23, minute:59, second:59, millisecond:999 });
+
+  const open = now >= start && now <= end;
+
+  res.json({
+    ok: true,
+    open,
+    start: start.toISO(),
+    end: end.toISO(),
+    now: now.toISO(),
+    tz: TZ
+  });
+});
+  
+// Always show 12 months ending at prev_month from the latest import batch
 const meta = await client.query(`
   SELECT prev_month
   FROM billing_import_batches

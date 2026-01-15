@@ -17,6 +17,14 @@
 <style>
   /* kritiski: paslēpj auth bloku jau pirms pārējais CSS/JS ielādējas */
   html.invite-mode #authBlock { display: none !important; }
+
+  /* Locked window mode: show form but disabled + dim */
+body.locked-mode #card{
+  opacity:.35;
+  filter:saturate(.8);
+  pointer-events:none;
+}
+body.locked-mode #lockModal{ display:block !important; }
 </style>
 
   <style>
@@ -493,6 +501,24 @@
     <div id="histMeta"></div>
     <div class="modalActions" style="margin-top:12px;">
       <button type="button" class="btn-outline primary" id="histCloseBtn">AIZVĒRT</button>
+    </div>
+  </div>
+</div>
+
+<!-- Locked window modal (only lookup/manual mode) -->
+<div id="lockModal" style="display:none;">
+  <div class="modalBackdrop"></div>
+  <div class="modalCard" style="max-width:520px;">
+    <div class="modalTitle" style="font-size:22px; text-align:center;">Rādījumu iesniegšana vēl nav atvērta</div>
+    <div class="modalText" style="text-align:center; font-size:16px; line-height:1.5;">
+      Rādījumus var iesniegt no <b>25. datuma 00:00</b> līdz mēneša pēdējai dienai <b>23:59</b>.
+      <div style="margin-top:10px; font-size:14px; color:#667085;">
+        Jautājumu gadījumā sazinieties ar klientu apkalpošanu:<br/>
+        <b>abonenti@jurmalasudens.lv</b> · <b>67811364</b>
+      </div>
+    </div>
+    <div class="modalActions" style="justify-content:center;">
+      <button class="btn-outline primary" id="lockCloseBtn" type="button">AIZVĒRT</button>
     </div>
   </div>
 </div>
@@ -1677,12 +1703,44 @@ if (submitBtn) {
     else submit();
   };
 }
+async function applyWindowLockIfNeeded(){
+  // Invite režīmā šo NERĀDĀM
+  if (document.documentElement.classList.contains('invite-mode')) return;
+
+  try{
+    const r = await fetch('/api/window-status', { cache:'no-store' });
+    const j = await r.json().catch(()=>null);
+    if (!r.ok || !j || j.ok !== true) return;
+
+    if (j.open) return; // viss ok
+
+    // noņemam sarkano paziņojumu (ja tāds ir)
+    document.querySelectorAll('#windowNotice,#windowBanner,.windowNotice,.windowBanner')
+      .forEach(el => el.style.display='none');
+
+    document.body.classList.add('locked-mode');
+
+    // AIZVĒRT: back, ja iespējams, citādi uz jurmalasudens.lv
+    const btn = document.getElementById('lockCloseBtn');
+    if (btn){
+      btn.onclick = () => {
+        if (history.length > 1) history.back();
+        else location.href = 'https://www.jurmalasudens.lv/';
+      };
+    }
+  } catch(e){
+    // ja kaut kas ar fetch, nekrītam nost
+  }
+}
+
+
 
     
     refreshAll();
   }
 
   init();
+  applyWindowLockIfNeeded();
 </script>
 </body>
 </html>
