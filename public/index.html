@@ -1690,19 +1690,9 @@ if (btn && !btn.dataset.boundInvite) {
       if ($("#submitBtn").classList.contains("disabled")) showSubmitBlockedInfo();
       else { if (INVITE_MODE) submitInvite(); else submit(); }
     });
+  
+  }
 
-const submitBtn = document.getElementById("submitBtn");
-if (submitBtn) {
-  submitBtn.onclick = () => {
-    console.log("SUBMIT CLICK, INVITE_MODE=", INVITE_MODE);
-    if (submitBtn.classList.contains("disabled")) {
-      showSubmitBlockedInfo();
-      return;
-    }
-    if (INVITE_MODE) submitInvite();
-    else submit();
-  };
-}
 async function applyWindowLockIfNeeded(){
   // Invite režīmā šo NERĀDĀM
   if (document.documentElement.classList.contains('invite-mode')) return;
