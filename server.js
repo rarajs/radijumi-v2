@@ -2478,7 +2478,7 @@ async function processUnifiedImport(jobId, file, filename) {
           meterType,
           period_from: pFromIso || null,
           period_to: pToIso || null,
-          last_reading: Number.isFinite(prevReadingNum) ? prevReadingNum : null,
+          last_reading: Number.isFinite(readingNum) ? readingNum : null,
           reading: Number.isFinite(readingNum) ? readingNum : null,
           consumption: qtyNum,
           qtyType,
