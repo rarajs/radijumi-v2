@@ -666,7 +666,7 @@ body.locked-mode #lockModal{ display:block !important; }
         box.innerHTML = "<b>Rādījumu iesniegšana no 25.datuma līdz mēneša beigām.</b>";
         box.classList.add("show");
       } else if (!w.enforce) {
-        box.innerHTML = "<b>TESTA vide:</b> iesniegšana nav ierobežota pēc datuma.";
+        box.innerHTML = "<b>TESTA VIDE:</b> iesniegšana nav ierobežota";
         box.classList.add("show");
       } else {
         box.classList.remove("show");
@@ -1253,6 +1253,13 @@ const f5 = el("div", { class:"field historyCell" }, [
         const rows = buildLinesLookup();
         if (!rows.length) reasons.push("Nav atrasts neviens skaitītājs.");
 
+        // pietiek ar vismaz vienu aizpildītu skaitītāju
+        const anyFilled = rows.some(ln => (ln._newRaw || "") || (ln._consRaw || ""));
+        if (!anyFilled) {
+          reasons.push("Ievadi jauno rādījumu vai patēriņu vismaz vienam skaitītājam.");
+          return reasons;
+        }
+
         rows.forEach((ln, idx) => {
           const newNorm = ln._newRaw || "";
           const consNorm = ln._consRaw || "";
@@ -1261,10 +1268,8 @@ const f5 = el("div", { class:"field historyCell" }, [
           const hasNew = !!newNorm;
           const hasCons = !!consNorm;
 
-          if (!hasNew && !hasCons) {
-            reasons.push(`Skaitītājs ${idx+1}: ievadi jauno rādījumu vai patēriņu.`);
-            return;
-          }
+          // tukšos skaitītājus ignorējam
+          if (!hasNew && !hasCons) return;
 
           if (hasNew) {
             if (!CFG.readingRegex.test(newNorm)) {
@@ -1377,7 +1382,7 @@ const f5 = el("div", { class:"field historyCell" }, [
         mode: "lookup",
         abonenta_numurs: abon,
         contract_nr: contract,
-        lines: buildLinesLookup().map(x => ({ meter_no: x.meter_no, contract_nr: x.contract_nr, reading: x.reading })),
+        lines: buildLinesLookup().filter(x => x.reading).map(x => ({ meter_no: x.meter_no, contract_nr: x.contract_nr, reading: x.reading })),
         website: "",
         client_submission_id: cid
       };
