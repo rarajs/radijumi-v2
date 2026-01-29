@@ -1021,7 +1021,12 @@ const f5 = el("div", { class:"field historyCell" }, [
         return;
       }
 
-      setLookupNotice("good", "<b>Dati atrasti.</b> Ievadi jauno rādījumu vai patēriņu vismaz vienam skaitītājam.");
+      setLookupNotice(
+       "good",
+       LOOKUP_ALL_LOCKED
+         ? "<b>Viss iesniegts.</b> Šim mēnesim visi skaitītāji jau ir iesniegti."
+         : "<b>Dati atrasti.</b> Ievadi jauno rādījumu vai patēriņu vismaz vienam skaitītājam."
+      );
       renderAuto(j.addresses);
       LOOKUP_FOUND = true;
       // if all meters are already submitted (locked), hide submit button like invite mode
