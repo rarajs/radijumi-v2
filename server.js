@@ -696,16 +696,64 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
     const byAddr = new Map();
     const contracts = new Set();
 
+    // collect contracts first
+    for (const r of q.rows) {
+      const c = String(r.contract_nr || '').trim();
+      if (c) contracts.add(c);
+    }
+    const contractsArr = Array.from(contracts);
+
+    // lock state for current month (prevents repeat submissions & allows showing already submitted)
+    const month = currentMonthYYYYMM();
+    let lockedMeterSet = new Set();
+    let submittedMap = new Map();
+
+    if (contractsArr.length) {
+      const s1 = await client.query(`
+        SELECT contract_nr, meter_no
+        FROM meter_submissions
+        WHERE month=$1 AND contract_nr = ANY($2::text[])
+      `, [month, contractsArr]);
+      lockedMeterSet = new Set(s1.rows.map(r => `${String(r.contract_nr)}|${String(r.meter_no)}`));
+
+      const rr = await client.query(`
+        SELECT ms.contract_nr, ms.meter_no, l.reading, l.consumption
+        FROM meter_submissions ms
+        JOIN submission_lines l
+          ON l.submission_id = ms.submission_id
+         AND l.contract_nr = ms.contract_nr
+         AND l.meter_no = ms.meter_no
+        WHERE ms.month = $1
+          AND ms.contract_nr = ANY($2::text[])
+      `, [month, contractsArr]);
+
+      for (const r of rr.rows) {
+        const k = `${String(r.contract_nr)}|${String(r.meter_no)}`;
+        submittedMap.set(k, {
+          reading: (r.reading == null) ? null : String(r.reading),
+          consumption: (r.consumption == null) ? null : String(r.consumption)
+        });
+      }
+    }
+
+    // build address -> meters
     for (const r of q.rows) {
       const addr = r.address_raw || '';
-      const c = r.contract_nr || '';
-      if (c) contracts.add(c);
-
       if (!byAddr.has(addr)) byAddr.set(addr, []);
+
+      const c = String(r.contract_nr || '').trim();
+      const m = String(r.meter_serial || '').trim();
+      const key = (c && m) ? `${c}|${m}` : "";
+      const locked = (c && m) ? lockedMeterSet.has(key) : false;
+      const sub = (locked && key) ? (submittedMap.get(key) || null) : null;
+
       byAddr.get(addr).push({
         meter_serial: r.meter_serial,
         last_reading: r.last_reading,
-        contract_nr: r.contract_nr || null
+        contract_nr: c || null,
+        locked,
+        submitted_reading: sub ? sub.reading : null,
+        submitted_consumption: sub ? sub.consumption : null
       });
     }
 
@@ -714,7 +762,7 @@ app.get('/api/lookup', lookupLimiter, async (req, res) => {
       found: true,
       batch_id: batchId,
       client_name: q.rows[0].client_name || null,
-      contracts: Array.from(contracts),
+      contracts: contractsArr,
       addresses: Array.from(byAddr.entries()).map(([address, meters]) => ({ address, meters }))
     });
   } catch (e) {
@@ -1329,7 +1377,30 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
         ]);
       }
 
-      await db.query('COMMIT');
+      
+      // lock meters for the current month to prevent repeat submissions
+      const month = currentMonthYYYYMM();
+      for (const x of cleanLines) {
+        const ins = await db.query(`
+          INSERT INTO meter_submissions (month, contract_nr, meter_no, submission_id)
+          VALUES ($1,$2,$3,$4)
+          ON CONFLICT (month, contract_nr, meter_no) DO NOTHING
+          RETURNING 1
+        `, [month, x.contract_nr, x.meter_no, submissionId]);
+
+        if (!ins.rowCount) {
+          await db.query('ROLLBACK');
+          return res.status(409).json({
+            ok: false,
+            error: 'ALREADY_SUBMITTED',
+            contract_nr: x.contract_nr,
+            meter_no: x.meter_no,
+            month
+          });
+        }
+      }
+
+await db.query('COMMIT');
 
       // LIVE notify: one message per address
       try {

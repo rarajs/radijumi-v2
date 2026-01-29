@@ -583,6 +583,7 @@ body.locked-mode #lockModal{ display:block !important; }
   let LOOKUP_LOADING = false;
   let LOOKUP_FOUND = false;
   let LOOKUP_ATTEMPTED = false;
+    LOOKUP_ALL_LOCKED = false;
 
   // UX flags: show field errors only after user interaction or lookup attempt
   let CONTRACT_TOUCHED = false;
@@ -593,6 +594,7 @@ body.locked-mode #lockModal{ display:block !important; }
   let INVITE_TOKEN = '';
   let INVITE_SUBSCRIBER = '';
   let INVITE_ALL_LOCKED = false;
+  let LOOKUP_ALL_LOCKED = false;
 
 
   function setSubmitVisible(isVisible){
@@ -690,7 +692,8 @@ body.locked-mode #lockModal{ display:block !important; }
         if (inp.value && i < 7) host.children[i+1].focus();
 
         if (MODE === "lookup") {
-          LOOKUP_FOUND = false; LOOKUP_ATTEMPTED = false; LOOKUP_LOADING = false;
+          LOOKUP_FOUND = false; LOOKUP_ATTEMPTED = false;
+    LOOKUP_ALL_LOCKED = false; LOOKUP_LOADING = false;
           setLookupNotice(null, ""); clearAuto();
         }
         refreshAll();
@@ -709,7 +712,8 @@ body.locked-mode #lockModal{ display:block !important; }
         (host.children[Math.min(digits.length,7)] || host.children[7]).focus();
 
         if (MODE === "lookup") {
-          LOOKUP_FOUND = false; LOOKUP_ATTEMPTED = false; LOOKUP_LOADING = false;
+          LOOKUP_FOUND = false; LOOKUP_ATTEMPTED = false;
+    LOOKUP_ALL_LOCKED = false; LOOKUP_LOADING = false;
           setLookupNotice(null, ""); clearAuto();
         }
         refreshAll();
@@ -793,6 +797,15 @@ body.locked-mode #lockModal{ display:block !important; }
       const res = await fetch(`/api/history?subscriber=${encodeURIComponent(subscriber)}&contract=${encodeURIComponent(contract)}&meter=${encodeURIComponent(meter)}`);
       const j = await res.json().catch(()=>null);
       if (!res.ok || !j || j.ok !== true) {
+        // Invite-like handling when already submitted (race condition / second attempt)
+        if (res.status === 409 && j && j.error === "ALREADY_SUBMITTED") {
+          setLookupNotice("warn", "<b>Viss iesniegts.</b> Šim mēnesim visi skaitītāji jau ir iesniegti.");
+          try { await runLookup(); } catch (e) {}
+          btn.classList.remove("disabled");
+          btn.setAttribute("aria-disabled", "false");
+          return;
+        }
+
         $('#histLoading').textContent = 'Neizdevās ielādēt vēsturi.';
         return;
       }
@@ -1022,9 +1035,15 @@ const f5 = el("div", { class:"field historyCell" }, [
         return;
       }
 
-      setLookupNotice("good", "<b>Dati atrasti.</b> Ievadi jauno rādījumu vai patēriņu visiem skaitītājiem.");
+      setLookupNotice("good", "<b>Dati atrasti.</b> Ievadi jauno rādījumu vai patēriņu vismaz vienam skaitītājam.");
       renderAuto(j.addresses);
       LOOKUP_FOUND = true;
+      // if all meters are already submitted (locked), hide submit button like invite mode
+      LOOKUP_ALL_LOCKED = Array.isArray(j.addresses) && j.addresses.length > 0 && j.addresses.every(a =>
+        Array.isArray(a.meters) && a.meters.length > 0 && a.meters.every(mm => !!mm.locked)
+      );
+      setSubmitVisible(!LOOKUP_ALL_LOCKED);
+
       document.getElementById("autoSection").scrollIntoView({ behavior:"smooth", block:"start" });
 
       refreshAll();
@@ -1222,6 +1241,8 @@ const f5 = el("div", { class:"field historyCell" }, [
     if (!built.ok) return [built.error];
     return [];
   }
+
+      if (LOOKUP_FOUND && LOOKUP_ALL_LOCKED) return ["Viss iesniegts šim mēnesim."];
 
     const reasons = [];
     const abon = readAbonentaKods();
@@ -1434,6 +1455,7 @@ const f5 = el("div", { class:"field historyCell" }, [
     LOOKUP_FOUND = false;
     LOOKUP_LOADING = false;
     LOOKUP_ATTEMPTED = false;
+    LOOKUP_ALL_LOCKED = false;
 
     setLookupNotice(null, "");
     clearAuto();
@@ -1670,6 +1692,7 @@ if (btn && !btn.dataset.boundInvite) {
       if (MODE === "lookup") {
         LOOKUP_FOUND = false;
         LOOKUP_ATTEMPTED = false;
+    LOOKUP_ALL_LOCKED = false;
         LOOKUP_LOADING = false;
         setLookupNotice(null, "");
         clearAuto();
