@@ -583,8 +583,7 @@ body.locked-mode #lockModal{ display:block !important; }
   let LOOKUP_LOADING = false;
   let LOOKUP_FOUND = false;
   let LOOKUP_ATTEMPTED = false;
-    LOOKUP_ALL_LOCKED = false;
-
+  let LOOKUP_ALL_LOCKED = false;
   // UX flags: show field errors only after user interaction or lookup attempt
   let CONTRACT_TOUCHED = false;
   let ABON_TOUCHED = false;
@@ -594,9 +593,6 @@ body.locked-mode #lockModal{ display:block !important; }
   let INVITE_TOKEN = '';
   let INVITE_SUBSCRIBER = '';
   let INVITE_ALL_LOCKED = false;
-  var LOOKUP_ALL_LOCKED = false;
-
-
   function setSubmitVisible(isVisible){
     const btn = $("#submitBtn");
     btn.style.display = isVisible ? "block" : "none";
@@ -797,15 +793,6 @@ body.locked-mode #lockModal{ display:block !important; }
       const res = await fetch(`/api/history?subscriber=${encodeURIComponent(subscriber)}&contract=${encodeURIComponent(contract)}&meter=${encodeURIComponent(meter)}`);
       const j = await res.json().catch(()=>null);
       if (!res.ok || !j || j.ok !== true) {
-        // Invite-like handling when already submitted (race condition / second attempt)
-        if (res.status === 409 && j && j.error === "ALREADY_SUBMITTED") {
-          setLookupNotice("warn", "<b>Viss iesniegts.</b> Šim mēnesim visi skaitītāji jau ir iesniegti.");
-          try { await runLookup(); } catch (e) {}
-          btn.classList.remove("disabled");
-          btn.setAttribute("aria-disabled", "false");
-          return;
-        }
-
         $('#histLoading').textContent = 'Neizdevās ielādēt vēsturi.';
         return;
       }
@@ -976,7 +963,6 @@ const f5 = el("div", { class:"field historyCell" }, [
     });
 
     $("#autoSection").style.display = "block";
-    setSubmitVisible(true);   /* <-- parādām tikai tagad */
   }
 
   async function runLookup(){
@@ -1428,6 +1414,17 @@ const f5 = el("div", { class:"field historyCell" }, [
         body: JSON.stringify(payload)
       });
       const j = await res.json().catch(()=>null);
+
+      // Invite-like handling when already submitted (avoid showing "KĻŪDA ALREADY_SUBMITTED")
+      if (res.status === 409 && j && j.error === 'ALREADY_SUBMITTED') {
+        hideModal('#submitModal');
+        setLookupNotice("good", "<b>Viss iesniegts.</b> Šim mēnesim visi skaitītāji jau ir iesniegti.");
+        // refresh lookup to update locked meters and hide submit if needed
+        try { await runLookup(); } catch (e) {}
+        btn.classList.remove("disabled");
+        btn.setAttribute("aria-disabled", "false");
+        return;
+      }
 
       if (!res.ok || !j || j.ok !== true) {
         modalStateError((j && j.error) ? j.error : "Neizdevās nosūtīt.");
