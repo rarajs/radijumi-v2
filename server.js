@@ -1923,7 +1923,7 @@ app.get('/admin/invite_incomplete.csv', requireBasicAuth, async (req, res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="invite_incomplete_${month}.csv"`);
 
-  res.write(toCSVRow(['subscriber_code','email','invite_link','missing_meters_count','missing_meters_list']));
+  res.write(toCSVRow(['subscriber_code','email','invite_link','Adrese']));
 
   const client = await pool.connect();
   try {
@@ -1960,7 +1960,7 @@ app.get('/admin/invite_incomplete.csv', requireBasicAuth, async (req, res) => {
         SELECT unnest($1::text[]) AS subscriber_code
       ),
       all_meters AS (
-        SELECT b.subscriber_code, b.contract_nr, b.meter_serial
+        SELECT b.subscriber_code, b.contract_nr, b.meter_serial, b.address_raw
         FROM billing_meters_snapshot b, latest_batch lb
         WHERE b.batch_id = lb.id
           AND b.subscriber_code IN (SELECT subscriber_code FROM invited_subs)
@@ -1974,7 +1974,7 @@ app.get('/admin/invite_incomplete.csv', requireBasicAuth, async (req, res) => {
         WHERE month = $3
       ),
       missing AS (
-        SELECT a.subscriber_code, a.contract_nr, a.meter_serial
+        SELECT a.subscriber_code, a.contract_nr, a.meter_serial, a.address_raw
         FROM all_meters a
         LEFT JOIN submitted s
           ON s.contract_nr = a.contract_nr
@@ -1985,7 +1985,8 @@ app.get('/admin/invite_incomplete.csv', requireBasicAuth, async (req, res) => {
         subscriber_code,
         COUNT(*) AS missing_count,
         STRING_AGG(contract_nr || ':' || meter_serial, ' | ' ORDER BY contract_nr, meter_serial) AS missing_list,
-        STRING_AGG(DISTINCT contract_nr, '|' ORDER BY contract_nr) AS contracts_list
+        STRING_AGG(DISTINCT contract_nr, '|' ORDER BY contract_nr) AS contracts_list,
+        STRING_AGG(DISTINCT address_raw, ' | ' ORDER BY address_raw) FILTER (WHERE address_raw IS NOT NULL AND btrim(address_raw) <> '') AS address_list
       FROM missing
       GROUP BY subscriber_code
       HAVING COUNT(*) > 0
@@ -2006,8 +2007,7 @@ app.get('/admin/invite_incomplete.csv', requireBasicAuth, async (req, res) => {
       if (!sub || !token) continue;
 
       const link = `${baseUrl}/i/${token}`;
-      const missingCount = String(r.missing_count || '0');
-      const missingList = String(r.missing_list || '');
+      const address = String(r.address_list || '').trim();
       const contracts = String(r.contracts_list || '').split('|').map(s => s.trim()).filter(Boolean);
 
       const emailSet = new Set();
@@ -2017,10 +2017,10 @@ app.get('/admin/invite_incomplete.csv', requireBasicAuth, async (req, res) => {
       }
 
       if (emailSet.size === 0) {
-        res.write(toCSVRow([sub, '', link, missingCount, missingList]));
+        res.write(toCSVRow([sub, '', link, address]));
       } else {
         for (const e of emailSet) {
-          res.write(toCSVRow([sub, e, link, missingCount, missingList]));
+          res.write(toCSVRow([sub, e, link, address]));
         }
       }
     }
