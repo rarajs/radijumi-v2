@@ -1191,38 +1191,48 @@ const f5 = el("div", { class:"field historyCell" }, [
   }
 
   function buildLinesLookup() {
-    const rows = $$(".auto-meter-row", $("#autoAddresses"));
-    const out = [];
+  const rows = $$(".auto-meter-row", $("#autoAddresses"));
+  const out = [];
 
-    for (const r of rows) {
-      const meter = r.getAttribute("data-meter") || "";
-      const contract = r.getAttribute("data-contract") || "";
+  for (const r of rows) {
+    const meter = r.getAttribute("data-meter") || "";
+    const contract = r.getAttribute("data-contract") || "";
 
-      const prev = parseReading($("input[data-role='last']", r).value);
+    const prev = parseReading($("input[data-role='last']", r).value);
 
-      const newRaw = $("input[data-role='new']", r).value;
-      const consRaw = $("input[data-role='cons']", r).value;
+    const newEl  = $("input[data-role='new']", r);
+    const consEl = $("input[data-role='cons']", r);
 
-      const newNorm = normalizeReadingInput(newRaw);
-      const consNorm = normalizeReadingInput(consRaw);
-
-      const newNum = parseReading(newNorm);
-      const consNum = parseReading(consNorm);
-
-      let reading = "";
-
-      if (newNorm && CFG.readingRegex.test(newNorm) && newNum != null) {
-        reading = newNorm;
-      } else if (consNorm && CFG.readingRegex.test(consNorm) && consNum != null && prev != null) {
-        reading = (prev + consNum).toFixed(2);
-      } else {
-        reading = "";
-      }
-
-      out.push({ meter_no: meter, contract_nr: contract, reading, _newRaw: newNorm, _consRaw: consNorm, _prev: prev });
+    // ✅ JA LOCKED (disabled) → ignorējam šo rindu pilnībā,
+    // lai tā neaktivizē pogu un netiek sūtīta uz /api/submit
+    if ((newEl && newEl.disabled) || (consEl && consEl.disabled)) {
+      continue;
     }
-    return out;
+
+    const newRaw = newEl ? newEl.value : "";
+    const consRaw = consEl ? consEl.value : "";
+
+    const newNorm = normalizeReadingInput(newRaw);
+    const consNorm = normalizeReadingInput(consRaw);
+
+    const newNum = parseReading(newNorm);
+    const consNum = parseReading(consNorm);
+
+    let reading = "";
+
+    if (newNorm && CFG.readingRegex.test(newNorm) && newNum != null) {
+      reading = newNorm;
+    } else if (consNorm && CFG.readingRegex.test(consNorm) && consNum != null && prev != null) {
+      reading = (prev + consNum).toFixed(2);
+    } else {
+      reading = "";
+    }
+
+    out.push({ meter_no: meter, contract_nr: contract, reading, _newRaw: newNorm, _consRaw: consNorm, _prev: prev });
   }
+
+  return out;
+}
 
     function getBlockingReasons() {
 
@@ -1269,7 +1279,7 @@ const f5 = el("div", { class:"field historyCell" }, [
         if (!rows.length) reasons.push("Nav atrasts neviens skaitītājs.");
 
         // pietiek ar vismaz vienu aizpildītu skaitītāju
-        const anyFilled = rows.some(ln => (ln._newRaw || "") || (ln._consRaw || ""));
+        const anyFilled = rows.some(ln => (ln._newRaw || "").trim() || (ln._consRaw || "").trim());
         if (!anyFilled) {
           reasons.push("Ievadi jauno rādījumu vai patēriņu vismaz vienam skaitītājam.");
           return reasons;
