@@ -248,22 +248,11 @@ body.locked-mode #lockModal{ display:block !important; }
 }
 
 /* Patēriņš negatīvs */
-.auto-meter-row.neg .consDisplay{
+.auto-meter-row.neg input[data-role="cons"]{
   color:var(--danger);
   font-weight:1000;
 }
 
-/* Patēriņš kā ne-ievades lauks */
-.consDisplay{
-  border:2px solid #cfd6de;
-  border-radius:var(--radius);
-  padding:10px 10px;
-  background:#f3f5f8;
-  color:#111;
-  min-height:44px;
-  display:flex;
-  align-items:center;
-}
 /* kompaktāki ievades lauki auto režīmā */
 #autoSection input[type="text"]{ padding:10px 10px; }
 #autoSection label{ font-size:12px; }
@@ -604,8 +593,6 @@ body.locked-mode #lockModal{ display:block !important; }
   let INVITE_TOKEN = '';
   let INVITE_SUBSCRIBER = '';
   let INVITE_ALL_LOCKED = false;
-  const NEGATIVE_ALERT_MSG = "Negatīvu rādījumu nevar iesniegt. Lūdzu sazināties ar klientu apkalpošanas daļu.";
-  let HAS_NEGATIVE_READING = false;
   function setSubmitVisible(isVisible){
     const btn = $("#submitBtn");
     btn.style.display = isVisible ? "block" : "none";
@@ -839,20 +826,35 @@ body.locked-mode #lockModal{ display:block !important; }
     function computeFromNew(row) {
       const lastEl = $("input[data-role='last']", row);
       const newEl = $("input[data-role='new']", row);
-      const consEl = $("[data-role='consDisplay']", row);
+      const consEl = $("input[data-role='cons']", row);
 
       const prev = parseReading(lastEl.value);
       const cur = parseReading(newEl.value);
 
       if (prev == null || cur == null) {
-        if (!String(newEl.value || '').trim()) consEl.textContent = "";
+        if (!String(newEl.value || '').trim()) consEl.value = "";
         row.classList.remove("neg");
         return;
       }
 
       const diff = cur - prev;
-      consEl.textContent = diff.toFixed(2);
+      consEl.value = diff.toFixed(2);
       row.classList.toggle("neg", diff < 0);
+    }
+
+    function computeFromCons(row) {
+      const lastEl = $("input[data-role='last']", row);
+      const newEl = $("input[data-role='new']", row);
+      const consEl = $("input[data-role='cons']", row);
+
+      const prev = parseReading(lastEl.value);
+      const cons = parseReading(consEl.value);
+
+      if (prev == null || cons == null) return;
+
+      const cur = prev + cons;
+      newEl.value = cur.toFixed(2);
+      row.classList.toggle("neg", (cur - prev) < 0);
     }
 
     addresses.forEach((a) => {
@@ -891,10 +893,10 @@ body.locked-mode #lockModal{ display:block !important; }
           newInp
         ]);
 
-        const consBox = el("div", { class:"consDisplay", "data-role":"consDisplay", text:"" });
+        const consInp = el("input", { type:"text", inputmode:"decimal", placeholder:"Ievadi patēriņu", "data-role":"cons" });
         const f4 = el("div", { class:"field" }, [
           el("label", { text:"Patēriņš" }),
-          consBox
+          consInp
         ]);
 
         const histBtn = el("button", {
@@ -911,12 +913,10 @@ body.locked-mode #lockModal{ display:block !important; }
         if (m && m.locked) {
   row.setAttribute("data-locked", "1");
   newInp.disabled = true;
+  consInp.disabled = true;
 
-  const srRaw = (m.submitted_reading == null) ? "" : String(m.submitted_reading);
-  const scRaw = (m.submitted_consumption == null) ? "" : String(m.submitted_consumption);
-
-  const prev = parseReading(last);
-  const sr = normalizeReadingInput(srRaw);
+  const sr = (m.submitted_reading == null) ? "" : String(m.submitted_reading);
+  const sc = (m.submitted_consumption == null) ? "" : String(m.submitted_consumption);
 
   if (sr) {
     newInp.value = sr;
@@ -926,18 +926,12 @@ body.locked-mode #lockModal{ display:block !important; }
     newInp.placeholder = "Jau iesniegts";
   }
 
-  if (scRaw) {
-    consBox.textContent = normalizeReadingInput(scRaw);
-  } else if (prev != null && sr) {
-    const cur = parseReading(sr);
-    consBox.textContent = (cur == null) ? "" : (cur - prev).toFixed(2);
+  if (sc) {
+    consInp.value = sc;
+    consInp.placeholder = "";
   } else {
-    consBox.textContent = "";
-  }
-
-  if (prev != null && sr) {
-    const cur = parseReading(sr);
-    row.classList.toggle("neg", (cur != null && cur < prev));
+    consInp.value = "";
+    consInp.placeholder = "Jau iesniegts";
   }
 } else {
   row.setAttribute("data-locked", "0");
@@ -951,6 +945,12 @@ const f5 = el("div", { class:"field historyCell" }, [
         newInp.addEventListener("input", () => {
           newInp.value = normalizeReadingInput(newInp.value);
           computeFromNew(row);
+          refreshAll();
+        });
+
+        consInp.addEventListener("input", () => {
+          consInp.value = normalizeReadingInput(consInp.value);
+          computeFromCons(row);
           refreshAll();
         });
 
@@ -1029,7 +1029,7 @@ const f5 = el("div", { class:"field historyCell" }, [
        "good",
        LOOKUP_ALL_LOCKED
          ? "<b>Viss iesniegts.</b> Šim mēnesim visi skaitītāji jau ir iesniegti."
-         : "<b>Dati atrasti.</b> Ievadi jauno rādījumu vismaz vienam skaitītājam."
+         : "<b>Dati atrasti.</b> Ievadi jauno rādījumu vai patēriņu vismaz vienam skaitītājam."
       );
       
       renderAuto(j.addresses);
@@ -1201,34 +1201,40 @@ const f5 = el("div", { class:"field historyCell" }, [
     const prev = parseReading($("input[data-role='last']", r).value);
 
     const newEl  = $("input[data-role='new']", r);
+    const consEl = $("input[data-role='cons']", r);
 
     // ✅ JA LOCKED (disabled) → ignorējam šo rindu pilnībā,
     // lai tā neaktivizē pogu un netiek sūtīta uz /api/submit
-    if (newEl && newEl.disabled) {
+    if ((newEl && newEl.disabled) || (consEl && consEl.disabled)) {
       continue;
     }
 
     const newRaw = newEl ? newEl.value : "";
+    const consRaw = consEl ? consEl.value : "";
+
     const newNorm = normalizeReadingInput(newRaw);
+    const consNorm = normalizeReadingInput(consRaw);
+
+    const newNum = parseReading(newNorm);
+    const consNum = parseReading(consNorm);
 
     let reading = "";
-    const newNum = parseReading(newNorm);
 
     if (newNorm && CFG.readingRegex.test(newNorm) && newNum != null) {
       reading = newNorm;
+    } else if (consNorm && CFG.readingRegex.test(consNorm) && consNum != null && prev != null) {
+      reading = (prev + consNum).toFixed(2);
     } else {
       reading = "";
     }
 
-    out.push({ meter_no: meter, contract_nr: contract, reading, _newRaw: newNorm, _prev: prev });
+    out.push({ meter_no: meter, contract_nr: contract, reading, _newRaw: newNorm, _consRaw: consNorm, _prev: prev });
   }
 
   return out;
 }
 
     function getBlockingReasons() {
-
-  HAS_NEGATIVE_READING = false;
 
   if (INVITE_MODE) {
     if (LOOKUP_LOADING) return ["Notiek ielāde… uzgaidi."];
@@ -1273,31 +1279,37 @@ const f5 = el("div", { class:"field historyCell" }, [
         if (!rows.length) reasons.push("Nav atrasts neviens skaitītājs.");
 
         // pietiek ar vismaz vienu aizpildītu skaitītāju
-        const anyFilled = rows.some(ln => (ln._newRaw || "").trim());
+        const anyFilled = rows.some(ln => (ln._newRaw || "").trim() || (ln._consRaw || "").trim());
         if (!anyFilled) {
-          reasons.push("Ievadi jauno rādījumu vismaz vienam skaitītājam.");
+          reasons.push("Ievadi jauno rādījumu vai patēriņu vismaz vienam skaitītājam.");
           return reasons;
         }
 
         rows.forEach((ln, idx) => {
           const newNorm = ln._newRaw || "";
+          const consNorm = ln._consRaw || "";
           const prev = ln._prev;
 
           const hasNew = !!newNorm;
+          const hasCons = !!consNorm;
 
           // tukšos skaitītājus ignorējam
-          if (!hasNew) return;
+          if (!hasNew && !hasCons) return;
 
-          if (!CFG.readingRegex.test(newNorm)) {
-            reasons.push(`Skaitītājs ${idx+1}: jaunajam rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
-            return;
-          }
-
-          const newNum = parseReading(newNorm);
-          if (prev != null && newNum != null && newNum < prev) {
-            HAS_NEGATIVE_READING = true;
-            reasons.push(`Skaitītājs ${idx+1}: jaunais rādījums nevar būt mazāks par iepriekšējo.`);
-            return;
+          if (hasNew) {
+            if (!CFG.readingRegex.test(newNorm)) {
+              reasons.push(`Skaitītājs ${idx+1}: jaunajam rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
+              return;
+            }
+          } else if (hasCons) {
+            if (prev == null) {
+              reasons.push(`Skaitītājs ${idx+1}: nevar ievadīt patēriņu, ja nav zināms pēdējais rādījums.`);
+              return;
+            }
+            if (!CFG.readingRegex.test(consNorm)) {
+              reasons.push(`Skaitītājs ${idx+1}: patēriņam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
+              return;
+            }
           }
 
           if (!ln.reading) reasons.push(`Skaitītājs ${idx+1}: ievade nav korekta.`);
@@ -1371,11 +1383,7 @@ const f5 = el("div", { class:"field historyCell" }, [
   async function submit() {
     updateSubmitState();
     const btn = $("#submitBtn");
-    if (btn.classList.contains("disabled")) {
-      if (HAS_NEGATIVE_READING) { alert(NEGATIVE_ALERT_MSG); return; }
-      showSubmitBlockedInfo();
-      return;
-    }
+    if (btn.classList.contains("disabled")) { showSubmitBlockedInfo(); return; }
 
     btn.classList.add("disabled");
     btn.setAttribute("aria-disabled", "true");
@@ -1515,9 +1523,9 @@ const f5 = el("div", { class:"field historyCell" }, [
 
       r.setAttribute("data-locked", "1");
       const newEl = $("input[data-role='new']", r);
+      const consEl = $("input[data-role='cons']", r);
       if (newEl) { newEl.disabled = true; newEl.placeholder = "Jau iesniegts"; newEl.value = ""; }
-      const consEl = $("[data-role='consDisplay']", r);
-      if (consEl) { consEl.textContent = ""; }
+      if (consEl) { consEl.disabled = true; consEl.placeholder = "Jau iesniegts"; consEl.value = ""; }
       r.classList.remove("neg");
     }
   }
@@ -1525,6 +1533,28 @@ const f5 = el("div", { class:"field historyCell" }, [
   function buildInvitePayload(){
     const rows = $$(".auto-meter-row", $("#autoAddresses"));
     const lines = [];
+
+    function calcReadingForRow(r){
+      const prev = parseReading($("input[data-role='last']", r)?.value);
+      const newNorm = normalizeReadingInput($("input[data-role='new']", r)?.value || "");
+      const consNorm = normalizeReadingInput($("input[data-role='cons']", r)?.value || "");
+
+      const hasNew = !!newNorm;
+      const hasCons = !!consNorm;
+
+      if (!hasNew && !hasCons) return { hasAny:false, ok:true, reading:"" };
+
+      if (hasNew) {
+        if (!CFG.readingRegex.test(newNorm)) return { hasAny:true, ok:false, reading:"" };
+        return { hasAny:true, ok:true, reading:newNorm };
+      }
+
+      if (prev == null) return { hasAny:true, ok:false, reading:"" };
+      if (!CFG.readingRegex.test(consNorm)) return { hasAny:true, ok:false, reading:"" };
+      const cons = parseReading(consNorm);
+      if (cons == null) return { hasAny:true, ok:false, reading:"" };
+      return { hasAny:true, ok:true, reading:(prev + cons).toFixed(2) };
+    }
 
     for (const r of rows) {
       const locked = (r.getAttribute("data-locked") === "1");
@@ -1534,21 +1564,14 @@ const f5 = el("div", { class:"field historyCell" }, [
       const meter = r.getAttribute("data-meter") || "";
       if (!contract || !meter) continue;
 
-      const prev = parseReading($("input[data-role='last']", r)?.value);
-      const newNorm = normalizeReadingInput($("input[data-role='new']", r)?.value || "");
-      if (!newNorm) continue;
+      const st = calcReadingForRow(r);
+      if (!st.hasAny) continue;
 
-      if (!CFG.readingRegex.test(newNorm)) {
+      if (!st.ok || !st.reading) {
         return { ok:false, error:`Skaitītājs ${meter}: pārbaudi ievadi (formatējums) vai izdzēs ievadi.`, lines: [] };
       }
 
-      const newNum = parseReading(newNorm);
-      if (prev != null && newNum != null && newNum < prev) {
-        HAS_NEGATIVE_READING = true;
-        return { ok:false, error:"Negatīvu rādījumu nevar iesniegt. Lūdzu sazināties ar klientu apkalpošanas daļu.", lines: [] };
-      }
-
-      lines.push({ meter_no: meter, contract_nr: contract, reading: newNorm });
+      lines.push({ meter_no: meter, contract_nr: contract, reading: st.reading });
     }
 
     if (!lines.length) return { ok:false, error:"Ievadi rādījumu vismaz vienam skaitītājam.", lines: [] };
@@ -1565,12 +1588,8 @@ if (btn && !btn.dataset.boundInvite) {
   btn.dataset.boundInvite = "1";
   btn.addEventListener("click", (e) => {
     e.preventDefault();
-    if (btn.classList.contains("disabled")) {
-      if (HAS_NEGATIVE_READING) { alert(NEGATIVE_ALERT_MSG); return; }
-      showSubmitBlockedInfo();
-    } else {
-      submitInvite();
-    }
+    if (btn.classList.contains("disabled")) showSubmitBlockedInfo();
+    else submitInvite();
   });
 }
 	setSubmitVisible(false);
@@ -1611,7 +1630,7 @@ if (btn && !btn.dataset.boundInvite) {
 
       setLookupNotice("good", INVITE_ALL_LOCKED
         ? "<b>Viss iesniegts.</b> Šim mēnesim visi skaitītāji jau ir iesniegti."
-        : "<b>Dati ielādēti.</b> Ievadi jauno rādījumu."
+        : "<b>Dati ielādēti.</b> Ievadi jauno rādījumu vai patēriņu."
       );
 
       renderAuto(j.addresses || []);
@@ -1633,7 +1652,6 @@ if (btn && !btn.dataset.boundInvite) {
   async function submitInvite(){
     const built = buildInvitePayload();
     if (!built.ok) {
-      if (built.error === NEGATIVE_ALERT_MSG) { alert(NEGATIVE_ALERT_MSG); return; }
       modalStateError(built.error);
       return;
     }
