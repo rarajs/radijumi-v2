@@ -248,11 +248,22 @@ body.locked-mode #lockModal{ display:block !important; }
 }
 
 /* Patēriņš negatīvs */
-.auto-meter-row.neg input[data-role="cons"]{
+.auto-meter-row.neg .consDisplay{
   color:var(--danger);
   font-weight:1000;
 }
 
+/* Patēriņš kā ne-ievades lauks */
+.consDisplay{
+  border:2px solid #cfd6de;
+  border-radius:var(--radius);
+  padding:10px 10px;
+  background:#f3f5f8;
+  color:#111;
+  min-height:44px;
+  display:flex;
+  align-items:center;
+}
 /* kompaktāki ievades lauki auto režīmā */
 #autoSection input[type="text"]{ padding:10px 10px; }
 #autoSection label{ font-size:12px; }
@@ -593,6 +604,8 @@ body.locked-mode #lockModal{ display:block !important; }
   let INVITE_TOKEN = '';
   let INVITE_SUBSCRIBER = '';
   let INVITE_ALL_LOCKED = false;
+  const NEGATIVE_ALERT_MSG = "Negatīvu rādījumu nevar iesniegt. Lūdzu sazināties ar klientu apkalpošanas daļu.";
+  let HAS_NEGATIVE_READING = false;
   function setSubmitVisible(isVisible){
     const btn = $("#submitBtn");
     btn.style.display = isVisible ? "block" : "none";
@@ -823,34 +836,22 @@ body.locked-mode #lockModal{ display:block !important; }
     const host = $("#autoAddresses");
     host.innerHTML = "";
 
-    function setConsDisplay(el, value) {
-      if (!el) return;
-      const n = (value === "" || value == null) ? null : Number(value);
-      if (n == null || !Number.isFinite(n)) {
-        el.textContent = "—";
-        el.classList.add("empty");
-        return;
-      }
-      el.textContent = n.toFixed(2);
-      el.classList.remove("empty");
-    }
-
     function computeFromNew(row) {
       const lastEl = $("input[data-role='last']", row);
-      const newEl  = $("input[data-role='new']", row);
-      const consEl = $("[data-role='cons']", row);
+      const newEl = $("input[data-role='new']", row);
+      const consEl = $("[data-role='consDisplay']", row);
 
-      const prev = parseReading(lastEl?.value);
-      const cur  = parseReading(newEl?.value);
+      const prev = parseReading(lastEl.value);
+      const cur = parseReading(newEl.value);
 
       if (prev == null || cur == null) {
-        if (!String(newEl?.value || '').trim()) setConsDisplay(consEl, "");
+        if (!String(newEl.value || '').trim()) consEl.textContent = "";
         row.classList.remove("neg");
         return;
       }
 
       const diff = cur - prev;
-      setConsDisplay(consEl, diff);
+      consEl.textContent = diff.toFixed(2);
       row.classList.toggle("neg", diff < 0);
     }
 
@@ -890,11 +891,10 @@ body.locked-mode #lockModal{ display:block !important; }
           newInp
         ]);
 
-        const consDisplay = el("div", { class:"consDisplay empty", "data-role":"cons", text:"—" });
+        const consBox = el("div", { class:"consDisplay", "data-role":"consDisplay", text:"" });
         const f4 = el("div", { class:"field" }, [
           el("label", { text:"Patēriņš" }),
-          consDisplay,
-          el("div", { class:"hint", text:"Aprēķinās automātiski." })
+          consBox
         ]);
 
         const histBtn = el("button", {
@@ -912,8 +912,11 @@ body.locked-mode #lockModal{ display:block !important; }
   row.setAttribute("data-locked", "1");
   newInp.disabled = true;
 
-  const sr = (m.submitted_reading == null) ? "" : String(m.submitted_reading);
-  const sc = (m.submitted_consumption == null) ? "" : String(m.submitted_consumption);
+  const srRaw = (m.submitted_reading == null) ? "" : String(m.submitted_reading);
+  const scRaw = (m.submitted_consumption == null) ? "" : String(m.submitted_consumption);
+
+  const prev = parseReading(last);
+  const sr = normalizeReadingInput(srRaw);
 
   if (sr) {
     newInp.value = sr;
@@ -923,16 +926,19 @@ body.locked-mode #lockModal{ display:block !important; }
     newInp.placeholder = "Jau iesniegts";
   }
 
-  // Patēriņu mēģinām parādīt, ja serveris ir iedevis (vai var sarēķināt no sr un pēdējā rādījuma)
-  const prevV = parseReading(last);
-  let consV = null;
-  if (sc) consV = parseReading(sc);
-  if (consV == null && sr && prevV != null) {
-    const curV = parseReading(sr);
-    if (curV != null) consV = curV - prevV;
+  if (scRaw) {
+    consBox.textContent = normalizeReadingInput(scRaw);
+  } else if (prev != null && sr) {
+    const cur = parseReading(sr);
+    consBox.textContent = (cur == null) ? "" : (cur - prev).toFixed(2);
+  } else {
+    consBox.textContent = "";
   }
-  setConsDisplay(consDisplay, consV);
 
+  if (prev != null && sr) {
+    const cur = parseReading(sr);
+    row.classList.toggle("neg", (cur != null && cur < prev));
+  }
 } else {
   row.setAttribute("data-locked", "0");
 }
@@ -947,7 +953,8 @@ const f5 = el("div", { class:"field historyCell" }, [
           computeFromNew(row);
           refreshAll();
         });
-row.append(f1, f2, f3, f4, f5);
+
+        row.append(f1, f2, f3, f4, f5);
         metersHost.appendChild(row);
       });
 
@@ -1192,6 +1199,7 @@ row.append(f1, f2, f3, f4, f5);
     const contract = r.getAttribute("data-contract") || "";
 
     const prev = parseReading($("input[data-role='last']", r).value);
+
     const newEl  = $("input[data-role='new']", r);
 
     // ✅ JA LOCKED (disabled) → ignorējam šo rindu pilnībā,
@@ -1202,11 +1210,14 @@ row.append(f1, f2, f3, f4, f5);
 
     const newRaw = newEl ? newEl.value : "";
     const newNorm = normalizeReadingInput(newRaw);
-    const newNum = parseReading(newNorm);
 
     let reading = "";
+    const newNum = parseReading(newNorm);
+
     if (newNorm && CFG.readingRegex.test(newNorm) && newNum != null) {
       reading = newNorm;
+    } else {
+      reading = "";
     }
 
     out.push({ meter_no: meter, contract_nr: contract, reading, _newRaw: newNorm, _prev: prev });
@@ -1216,6 +1227,8 @@ row.append(f1, f2, f3, f4, f5);
 }
 
     function getBlockingReasons() {
+
+  HAS_NEGATIVE_READING = false;
 
   if (INVITE_MODE) {
     if (LOOKUP_LOADING) return ["Notiek ielāde… uzgaidi."];
@@ -1268,6 +1281,7 @@ row.append(f1, f2, f3, f4, f5);
 
         rows.forEach((ln, idx) => {
           const newNorm = ln._newRaw || "";
+          const prev = ln._prev;
 
           const hasNew = !!newNorm;
 
@@ -1276,6 +1290,13 @@ row.append(f1, f2, f3, f4, f5);
 
           if (!CFG.readingRegex.test(newNorm)) {
             reasons.push(`Skaitītājs ${idx+1}: jaunajam rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
+            return;
+          }
+
+          const newNum = parseReading(newNorm);
+          if (prev != null && newNum != null && newNum < prev) {
+            HAS_NEGATIVE_READING = true;
+            reasons.push(`Skaitītājs ${idx+1}: jaunais rādījums nevar būt mazāks par iepriekšējo.`);
             return;
           }
 
@@ -1350,18 +1371,10 @@ row.append(f1, f2, f3, f4, f5);
   async function submit() {
     updateSubmitState();
     const btn = $("#submitBtn");
-    if (btn.classList.contains("disabled")) { showSubmitBlockedInfo(); return; }
-
-    // Negatīvs patēriņš (jaunais rādījums mazāks par pēdējo) nav atļauts
-    if (MODE === "lookup") {
-      const negRows = $$(".auto-meter-row.neg", $("#autoAddresses")).filter(r => {
-        const newEl = $("input[data-role='new']", r);
-        return newEl && !newEl.disabled && String(newEl.value || "").trim();
-      });
-      if (negRows.length) {
-        modalStateError("Negatīvu rādījumu nevar iesniegt. Lūdzu sazināties ar klientu apkalpošanas daļu.");
-        return;
-      }
+    if (btn.classList.contains("disabled")) {
+      if (HAS_NEGATIVE_READING) { alert(NEGATIVE_ALERT_MSG); return; }
+      showSubmitBlockedInfo();
+      return;
     }
 
     btn.classList.add("disabled");
@@ -1503,13 +1516,8 @@ row.append(f1, f2, f3, f4, f5);
       r.setAttribute("data-locked", "1");
       const newEl = $("input[data-role='new']", r);
       if (newEl) { newEl.disabled = true; newEl.placeholder = "Jau iesniegts"; newEl.value = ""; }
-
-      const consEl = $("[data-role='cons']", r);
-      if (consEl) {
-        consEl.textContent = "—";
-        consEl.classList.add("empty");
-      }
-
+      const consEl = $("[data-role='consDisplay']", r);
+      if (consEl) { consEl.textContent = ""; }
       r.classList.remove("neg");
     }
   }
@@ -1517,17 +1525,6 @@ row.append(f1, f2, f3, f4, f5);
   function buildInvitePayload(){
     const rows = $$(".auto-meter-row", $("#autoAddresses"));
     const lines = [];
-
-    function calcReadingForRow(r){
-      const newNorm = normalizeReadingInput($("input[data-role='new']", r)?.value || "");
-
-      const hasNew = !!newNorm;
-
-      if (!hasNew) return { hasAny:false, ok:true, reading:"" };
-
-      if (!CFG.readingRegex.test(newNorm)) return { hasAny:true, ok:false, reading:"" };
-      return { hasAny:true, ok:true, reading:newNorm };
-    }
 
     for (const r of rows) {
       const locked = (r.getAttribute("data-locked") === "1");
@@ -1537,14 +1534,21 @@ row.append(f1, f2, f3, f4, f5);
       const meter = r.getAttribute("data-meter") || "";
       if (!contract || !meter) continue;
 
-      const st = calcReadingForRow(r);
-      if (!st.hasAny) continue;
+      const prev = parseReading($("input[data-role='last']", r)?.value);
+      const newNorm = normalizeReadingInput($("input[data-role='new']", r)?.value || "");
+      if (!newNorm) continue;
 
-      if (!st.ok || !st.reading) {
+      if (!CFG.readingRegex.test(newNorm)) {
         return { ok:false, error:`Skaitītājs ${meter}: pārbaudi ievadi (formatējums) vai izdzēs ievadi.`, lines: [] };
       }
 
-      lines.push({ meter_no: meter, contract_nr: contract, reading: st.reading });
+      const newNum = parseReading(newNorm);
+      if (prev != null && newNum != null && newNum < prev) {
+        HAS_NEGATIVE_READING = true;
+        return { ok:false, error:"Negatīvu rādījumu nevar iesniegt. Lūdzu sazināties ar klientu apkalpošanas daļu.", lines: [] };
+      }
+
+      lines.push({ meter_no: meter, contract_nr: contract, reading: newNorm });
     }
 
     if (!lines.length) return { ok:false, error:"Ievadi rādījumu vismaz vienam skaitītājam.", lines: [] };
@@ -1561,8 +1565,12 @@ if (btn && !btn.dataset.boundInvite) {
   btn.dataset.boundInvite = "1";
   btn.addEventListener("click", (e) => {
     e.preventDefault();
-    if (btn.classList.contains("disabled")) showSubmitBlockedInfo();
-    else submitInvite();
+    if (btn.classList.contains("disabled")) {
+      if (HAS_NEGATIVE_READING) { alert(NEGATIVE_ALERT_MSG); return; }
+      showSubmitBlockedInfo();
+    } else {
+      submitInvite();
+    }
   });
 }
 	setSubmitVisible(false);
@@ -1625,17 +1633,8 @@ if (btn && !btn.dataset.boundInvite) {
   async function submitInvite(){
     const built = buildInvitePayload();
     if (!built.ok) {
+      if (built.error === NEGATIVE_ALERT_MSG) { alert(NEGATIVE_ALERT_MSG); return; }
       modalStateError(built.error);
-      return;
-    }
-
-    // Negatīvs patēriņš (jaunais rādījums mazāks par pēdējo) nav atļauts
-    const negRows = $$(".auto-meter-row.neg", $("#autoAddresses")).filter(r => {
-      const newEl = $("input[data-role='new']", r);
-      return newEl && !newEl.disabled && String(newEl.value || "").trim();
-    });
-    if (negRows.length) {
-      modalStateError("Negatīvu rādījumu nevar iesniegt. Lūdzu sazināties ar klientu apkalpošanas daļu.");
       return;
     }
 

@@ -1143,12 +1143,16 @@ app.post('/api/invite/submit', submitLimiter, async (req, res) => {
       const cur = Number(String(x.reading));
       const cons = (prev == null) ? null : (cur - prev);
 
-      
-
         if (prev != null && cur < prev) {
           await db.query('ROLLBACK');
-          return res.status(400).json({ ok:false, error:'Negatīvu rādījumu nevar iesniegt. Lūdzu sazināties ar klientu apkalpošanas daļu.' });
+          return res.status(400).json({ ok:false, error: 'Negatīvu rādījumu nevar iesniegt. Lūdzu sazināties ar klientu apkalpošanas daļu.' });
         }
+
+      if (prev != null && cur < prev) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({ ok:false, error: 'Negatīvu rādījumu nevar iesniegt. Lūdzu sazināties ar klientu apkalpošanas daļu.' });
+      }
+
       await db.query(insertLineSql, [
         submissionId,
         x.contract_nr,
@@ -1364,13 +1368,7 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
         const cur = Number(String(x.reading));
         const cons = (prev == null) ? null : (cur - prev);
 
-        
-
-        if (prev != null && cur < prev) {
-          await db.query('ROLLBACK');
-          return res.status(400).json({ ok:false, error:'Negatīvu rādījumu nevar iesniegt. Lūdzu sazināties ar klientu apkalpošanas daļu.' });
-        }
-      await db.query(insertLineSql, [
+        await db.query(insertLineSql, [
           submissionId,
           x.contract_nr,
           x.meter_no,
