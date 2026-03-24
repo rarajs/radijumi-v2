@@ -344,6 +344,12 @@ function parseReading(value) {
   if (!Number.isFinite(num) || num < 0) return null;
   return s;
 }
+function isReadingBelowPrevious(reading, previousReading) {
+  if (reading == null || previousReading == null) return false;
+  const cur = Number(reading);
+  const prev = Number(previousReading);
+  return Number.isFinite(cur) && Number.isFinite(prev) && cur < prev;
+}
 function isValidEmail(email) {
   const s = String(email || '').trim();
   if (!s) return false;
@@ -1092,9 +1098,20 @@ app.post('/api/invite/submit', submitLimiter, async (req, res) => {
 
     for (const x of openLines) {
       const key = x.contract_nr + '|' + x.meter_no;
-      if (!snapByKey.has(key)) {
+      const s = snapByKey.get(key);
+      if (!s) {
         await db.query('ROLLBACK');
         return res.status(400).json({ ok:false, error:'Meter mismatch' });
+      }
+      if (isReadingBelowPrevious(x.reading, s.last_reading)) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({
+          ok:false,
+          error:'READING_LT_PREVIOUS',
+          contract_nr: x.contract_nr,
+          meter_no: x.meter_no,
+          previous_reading: s.last_reading == null ? null : String(s.last_reading)
+        });
       }
     }
 
@@ -1304,7 +1321,18 @@ app.post('/api/submit', submitLimiter, async (req, res) => {
 
       for (const x of cleanLines) {
         const key = String(x.contract_nr) + '|' + String(x.meter_no);
-        if (!snapByKey.has(key)) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Meter mismatch' }); }
+        const s = snapByKey.get(key);
+        if (!s) { await db.query('ROLLBACK'); return res.status(400).json({ ok:false, error:'Meter mismatch' }); }
+        if (isReadingBelowPrevious(x.reading, s.last_reading)) {
+          await db.query('ROLLBACK');
+          return res.status(400).json({
+            ok:false,
+            error:'READING_LT_PREVIOUS',
+            contract_nr: x.contract_nr,
+            meter_no: x.meter_no,
+            previous_reading: s.last_reading == null ? null : String(s.last_reading)
+          });
+        }
       }
 
       const firstSnap = snap.rows[0];

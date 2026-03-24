@@ -828,11 +828,18 @@ body.locked-mode #lockModal{ display:block !important; }
       const newEl = $("input[data-role='new']", row);
       const consEl = $("input[data-role='cons']", row);
 
+      const raw = String(newEl.value || '').trim();
       const prev = parseReading(lastEl.value);
-      const cur = parseReading(newEl.value);
+      const cur = parseReading(raw);
+
+      if (!raw) {
+        consEl.value = "";
+        row.classList.remove("neg");
+        return;
+      }
 
       if (prev == null || cur == null) {
-        if (!String(newEl.value || '').trim()) consEl.value = "";
+        consEl.value = "";
         row.classList.remove("neg");
         return;
       }
@@ -840,21 +847,6 @@ body.locked-mode #lockModal{ display:block !important; }
       const diff = cur - prev;
       consEl.value = diff.toFixed(2);
       row.classList.toggle("neg", diff < 0);
-    }
-
-    function computeFromCons(row) {
-      const lastEl = $("input[data-role='last']", row);
-      const newEl = $("input[data-role='new']", row);
-      const consEl = $("input[data-role='cons']", row);
-
-      const prev = parseReading(lastEl.value);
-      const cons = parseReading(consEl.value);
-
-      if (prev == null || cons == null) return;
-
-      const cur = prev + cons;
-      newEl.value = cur.toFixed(2);
-      row.classList.toggle("neg", (cur - prev) < 0);
     }
 
     addresses.forEach((a) => {
@@ -893,7 +885,7 @@ body.locked-mode #lockModal{ display:block !important; }
           newInp
         ]);
 
-        const consInp = el("input", { type:"text", inputmode:"decimal", placeholder:"Ievadi patēriņu", "data-role":"cons" });
+        const consInp = el("input", { type:"text", readonly:"true", placeholder:"Aprēķinās automātiski", "data-role":"cons" });
         const f4 = el("div", { class:"field" }, [
           el("label", { text:"Patēriņš" }),
           consInp
@@ -948,11 +940,6 @@ const f5 = el("div", { class:"field historyCell" }, [
           refreshAll();
         });
 
-        consInp.addEventListener("input", () => {
-          consInp.value = normalizeReadingInput(consInp.value);
-          computeFromCons(row);
-          refreshAll();
-        });
 
         row.append(f1, f2, f3, f4, f5);
         metersHost.appendChild(row);
@@ -1029,7 +1016,7 @@ const f5 = el("div", { class:"field historyCell" }, [
        "good",
        LOOKUP_ALL_LOCKED
          ? "<b>Viss iesniegts.</b> Šim mēnesim visi skaitītāji jau ir iesniegti."
-         : "<b>Dati atrasti.</b> Ievadi jauno rādījumu vai patēriņu vismaz vienam skaitītājam."
+         : "<b>Dati atrasti.</b> Ievadi jauno rādījumu vismaz vienam skaitītājam."
       );
       
       renderAuto(j.addresses);
@@ -1210,25 +1197,18 @@ const f5 = el("div", { class:"field historyCell" }, [
     }
 
     const newRaw = newEl ? newEl.value : "";
-    const consRaw = consEl ? consEl.value : "";
-
     const newNorm = normalizeReadingInput(newRaw);
-    const consNorm = normalizeReadingInput(consRaw);
-
     const newNum = parseReading(newNorm);
-    const consNum = parseReading(consNorm);
 
     let reading = "";
+    let diff = null;
 
     if (newNorm && CFG.readingRegex.test(newNorm) && newNum != null) {
       reading = newNorm;
-    } else if (consNorm && CFG.readingRegex.test(consNorm) && consNum != null && prev != null) {
-      reading = (prev + consNum).toFixed(2);
-    } else {
-      reading = "";
+      if (prev != null) diff = newNum - prev;
     }
 
-    out.push({ meter_no: meter, contract_nr: contract, reading, _newRaw: newNorm, _consRaw: consNorm, _prev: prev });
+    out.push({ meter_no: meter, contract_nr: contract, reading, _newRaw: newNorm, _prev: prev, _diff: diff });
   }
 
   return out;
@@ -1279,37 +1259,27 @@ const f5 = el("div", { class:"field historyCell" }, [
         if (!rows.length) reasons.push("Nav atrasts neviens skaitītājs.");
 
         // pietiek ar vismaz vienu aizpildītu skaitītāju
-        const anyFilled = rows.some(ln => (ln._newRaw || "").trim() || (ln._consRaw || "").trim());
+        const anyFilled = rows.some(ln => (ln._newRaw || "").trim());
         if (!anyFilled) {
-          reasons.push("Ievadi jauno rādījumu vai patēriņu vismaz vienam skaitītājam.");
+          reasons.push("Ievadi jauno rādījumu vismaz vienam skaitītājam.");
           return reasons;
         }
 
         rows.forEach((ln, idx) => {
           const newNorm = ln._newRaw || "";
-          const consNorm = ln._consRaw || "";
           const prev = ln._prev;
 
-          const hasNew = !!newNorm;
-          const hasCons = !!consNorm;
-
           // tukšos skaitītājus ignorējam
-          if (!hasNew && !hasCons) return;
+          if (!newNorm) return;
 
-          if (hasNew) {
-            if (!CFG.readingRegex.test(newNorm)) {
-              reasons.push(`Skaitītājs ${idx+1}: jaunajam rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
-              return;
-            }
-          } else if (hasCons) {
-            if (prev == null) {
-              reasons.push(`Skaitītājs ${idx+1}: nevar ievadīt patēriņu, ja nav zināms pēdējais rādījums.`);
-              return;
-            }
-            if (!CFG.readingRegex.test(consNorm)) {
-              reasons.push(`Skaitītājs ${idx+1}: patēriņam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
-              return;
-            }
+          if (!CFG.readingRegex.test(newNorm)) {
+            reasons.push(`Skaitītājs ${idx+1}: jaunajam rādījumam jābūt skaitlim (līdz 2 zīmēm aiz komata).`);
+            return;
+          }
+
+          if (prev != null && parseReading(newNorm) < prev) {
+            reasons.push(`Skaitītājs ${idx+1}: jaunais rādījums nevar būt mazāks par pēdējo rādījumu.`);
+            return;
           }
 
           if (!ln.reading) reasons.push(`Skaitītājs ${idx+1}: ievade nav korekta.`);
@@ -1537,23 +1507,15 @@ const f5 = el("div", { class:"field historyCell" }, [
     function calcReadingForRow(r){
       const prev = parseReading($("input[data-role='last']", r)?.value);
       const newNorm = normalizeReadingInput($("input[data-role='new']", r)?.value || "");
-      const consNorm = normalizeReadingInput($("input[data-role='cons']", r)?.value || "");
 
-      const hasNew = !!newNorm;
-      const hasCons = !!consNorm;
+      if (!newNorm) return { hasAny:false, ok:true, reading:"" };
+      if (!CFG.readingRegex.test(newNorm)) return { hasAny:true, ok:false, reading:"", reason:"format" };
 
-      if (!hasNew && !hasCons) return { hasAny:false, ok:true, reading:"" };
+      const cur = parseReading(newNorm);
+      if (cur == null) return { hasAny:true, ok:false, reading:"", reason:"format" };
+      if (prev != null && cur < prev) return { hasAny:true, ok:false, reading:"", reason:"lt_prev" };
 
-      if (hasNew) {
-        if (!CFG.readingRegex.test(newNorm)) return { hasAny:true, ok:false, reading:"" };
-        return { hasAny:true, ok:true, reading:newNorm };
-      }
-
-      if (prev == null) return { hasAny:true, ok:false, reading:"" };
-      if (!CFG.readingRegex.test(consNorm)) return { hasAny:true, ok:false, reading:"" };
-      const cons = parseReading(consNorm);
-      if (cons == null) return { hasAny:true, ok:false, reading:"" };
-      return { hasAny:true, ok:true, reading:(prev + cons).toFixed(2) };
+      return { hasAny:true, ok:true, reading:newNorm };
     }
 
     for (const r of rows) {
@@ -1568,7 +1530,10 @@ const f5 = el("div", { class:"field historyCell" }, [
       if (!st.hasAny) continue;
 
       if (!st.ok || !st.reading) {
-        return { ok:false, error:`Skaitītājs ${meter}: pārbaudi ievadi (formatējums) vai izdzēs ievadi.`, lines: [] };
+        const msg = st.reason === "lt_prev"
+          ? `Skaitītājs ${meter}: jaunais rādījums nevar būt mazāks par pēdējo rādījumu.`
+          : `Skaitītājs ${meter}: pārbaudi jaunā rādījuma formātu.`;
+        return { ok:false, error:msg, lines: [] };
       }
 
       lines.push({ meter_no: meter, contract_nr: contract, reading: st.reading });
@@ -1630,7 +1595,7 @@ if (btn && !btn.dataset.boundInvite) {
 
       setLookupNotice("good", INVITE_ALL_LOCKED
         ? "<b>Viss iesniegts.</b> Šim mēnesim visi skaitītāji jau ir iesniegti."
-        : "<b>Dati ielādēti.</b> Ievadi jauno rādījumu vai patēriņu."
+        : "<b>Dati ielādēti.</b> Ievadi jauno rādījumu."
       );
 
       renderAuto(j.addresses || []);
