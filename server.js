@@ -1957,6 +1957,7 @@ app.get('/admin/invite_incomplete.csv', requireBasicAuth, async (req, res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="invite_incomplete_${month}.csv"`);
 
+  res.write('\uFEFF');
   res.write(toCSVRow(['subscriber_code','email','invite_link','Adrese']));
 
   const client = await pool.connect();
@@ -3249,6 +3250,7 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="invites_${month}.csv"`);
+  res.write('\uFEFF');
   res.write(toCSVRow(['subscriber','email','link','adrese']));
 
   const client = await pool.connect();
