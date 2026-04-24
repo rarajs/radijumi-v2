@@ -365,6 +365,12 @@ function extractEmails(raw) {
     .filter(isValidEmail);
 }
 
+function stripPostalCodeFromAddress(raw) {
+  return String(raw || '')
+    .replace(/\s*,\s*LV[- ]?\d{4}\s*$/i, '')
+    .trim();
+}
+
 
 /* ===================== Invite token crypto helpers ===================== */
 function newToken() {
@@ -3257,7 +3263,7 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
     `, [month]);
 
     const subs = tokensQ.rows.map(r => String(r.subscriber_code || '').trim()).filter(Boolean);
-    let meterRows = [];
+    let snapshotRows = [];
     if (batchId && subs.length) {
       const q = await client.query(`
         SELECT DISTINCT subscriber_code, contract_nr, address_raw
@@ -3267,17 +3273,17 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
           AND contract_status='Aktīvs'
           AND meter_valid_to IS NULL
           AND last_reading IS NOT NULL
-        ORDER BY subscriber_code, contract_nr, address_raw
+        ORDER BY subscriber_code, address_raw, contract_nr
       `, [batchId, subs]);
-      meterRows = q.rows;
+      snapshotRows = q.rows;
     }
 
     const contractsBySub = new Map();
     const addressesBySub = new Map();
-    for (const r of meterRows) {
+    for (const r of snapshotRows) {
       const sub = String(r.subscriber_code || '').trim();
       const c = String(r.contract_nr || '').trim();
-      const addr = String(r.address_raw || '').trim();
+      const address = stripPostalCodeFromAddress(r.address_raw);
       if (!sub) continue;
 
       if (c) {
@@ -3285,13 +3291,13 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
         contractsBySub.get(sub).add(c);
       }
 
-      if (addr) {
+      if (address) {
         if (!addressesBySub.has(sub)) addressesBySub.set(sub, new Set());
-        addressesBySub.get(sub).add(addr);
+        addressesBySub.get(sub).add(address);
       }
     }
 
-    const allContracts = Array.from(new Set(meterRows.map(r => String(r.contract_nr || '').trim()).filter(Boolean)));
+    const allContracts = Array.from(new Set(snapshotRows.map(r => String(r.contract_nr || '').trim()).filter(Boolean)));
     const emailByContract = new Map();
     if (allContracts.length) {
       const e = await client.query(`
@@ -3317,8 +3323,8 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
 
       const contracts = contractsBySub.get(sub) ? Array.from(contractsBySub.get(sub)) : [];
       const addresses = addressesBySub.get(sub) ? Array.from(addressesBySub.get(sub)) : [''];
-      const emailSet = new Set();
 
+      const emailSet = new Set();
       for (const c of contracts) {
         const raw = String(emailByContract.get(c) || '').trim();
         for (const e of extractEmails(raw)) emailSet.add(e);
@@ -3327,9 +3333,9 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
       const emails = emailSet.size ? Array.from(emailSet) : [''];
       const link = `${baseUrl}/i/${token}`;
 
-      for (const addr of addresses) {
-        for (const e of emails) {
-          res.write(toCSVRow([sub, e, link, addr]));
+      for (const address of addresses) {
+        for (const email of emails) {
+          res.write(toCSVRow([sub, email, link, address]));
         }
       }
     }
@@ -3343,6 +3349,7 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
     client.release();
   }
 });
+
 
 
 /* ===================== start ===================== */
