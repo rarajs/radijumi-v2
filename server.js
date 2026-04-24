@@ -3095,7 +3095,7 @@ app.get('/admin/invites', requireBasicAuth, async (req, res) => {
       </form>
 
       <div class="grid" style="margin-top:12px">
-        <a class="btn" href="/admin/invites/export.csv">Lejupielādēt CSV (subscriber_code,email,link)</a>
+        <a class="btn" href="/admin/invites/export.csv">Lejupielādēt CSV (subscriber,email,link,adrese)</a>
       </div>
 
       <div class="muted" style="margin-top:10px"><a href="/admin">← atpakaļ</a></div>
@@ -3243,7 +3243,7 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="invites_${month}.csv"`);
-  res.write(toCSVRow(['subscriber_code','email','link']));
+  res.write(toCSVRow(['subscriber','email','link','adrese']));
 
   const client = await pool.connect();
   try {
@@ -3257,30 +3257,41 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
     `, [month]);
 
     const subs = tokensQ.rows.map(r => String(r.subscriber_code || '').trim()).filter(Boolean);
-    let contractRows = [];
+    let meterRows = [];
     if (batchId && subs.length) {
       const q = await client.query(`
-        SELECT DISTINCT subscriber_code, contract_nr
+        SELECT DISTINCT subscriber_code, contract_nr, address_raw
         FROM billing_meters_snapshot
         WHERE batch_id=$1
           AND subscriber_code = ANY($2::text[])
           AND contract_status='Aktīvs'
           AND meter_valid_to IS NULL
           AND last_reading IS NOT NULL
+        ORDER BY subscriber_code, contract_nr, address_raw
       `, [batchId, subs]);
-      contractRows = q.rows;
+      meterRows = q.rows;
     }
 
     const contractsBySub = new Map();
-    for (const r of contractRows) {
+    const addressesBySub = new Map();
+    for (const r of meterRows) {
       const sub = String(r.subscriber_code || '').trim();
       const c = String(r.contract_nr || '').trim();
-      if (!sub || !c) continue;
-      if (!contractsBySub.has(sub)) contractsBySub.set(sub, new Set());
-      contractsBySub.get(sub).add(c);
+      const addr = String(r.address_raw || '').trim();
+      if (!sub) continue;
+
+      if (c) {
+        if (!contractsBySub.has(sub)) contractsBySub.set(sub, new Set());
+        contractsBySub.get(sub).add(c);
+      }
+
+      if (addr) {
+        if (!addressesBySub.has(sub)) addressesBySub.set(sub, new Set());
+        addressesBySub.get(sub).add(addr);
+      }
     }
 
-    const allContracts = Array.from(new Set(contractRows.map(r => String(r.contract_nr || '').trim()).filter(Boolean)));
+    const allContracts = Array.from(new Set(meterRows.map(r => String(r.contract_nr || '').trim()).filter(Boolean)));
     const emailByContract = new Map();
     if (allContracts.length) {
       const e = await client.query(`
@@ -3305,21 +3316,21 @@ app.get('/admin/invites/export.csv', requireBasicAuth, async (req, res) => {
       if (!token) continue;
 
       const contracts = contractsBySub.get(sub) ? Array.from(contractsBySub.get(sub)) : [];
+      const addresses = addressesBySub.get(sub) ? Array.from(addressesBySub.get(sub)) : [''];
       const emailSet = new Set();
+
       for (const c of contracts) {
         const raw = String(emailByContract.get(c) || '').trim();
         for (const e of extractEmails(raw)) emailSet.add(e);
       }
 
+      const emails = emailSet.size ? Array.from(emailSet) : [''];
       const link = `${baseUrl}/i/${token}`;
 
-      if (emailSet.size === 0) {
-        res.write(toCSVRow([sub, '', link]));
-        continue;
-      }
-
-      for (const e of emailSet) {
-        res.write(toCSVRow([sub, e, link]));
+      for (const addr of addresses) {
+        for (const e of emails) {
+          res.write(toCSVRow([sub, e, link, addr]));
+        }
       }
     }
 
